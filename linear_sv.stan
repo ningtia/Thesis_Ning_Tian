@@ -3,7 +3,6 @@ data {
   int<lower=1> K;
   vector[T] y;
   matrix[T, K] X;
-  real h0_location;
 }
 
 parameters {
@@ -31,7 +30,7 @@ transformed parameters {
 }
 
 model {
-  mu ~ normal(h0_location, 2);
+  mu ~ normal(0, 5);
   phi_raw ~ normal(2, 1);
   sigma_eta ~ normal(0, 1);
   beta ~ normal(0, 1);
