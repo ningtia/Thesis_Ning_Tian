@@ -1,15 +1,15 @@
 data {
   int<lower=2> T;
-  int<lower=1> K;
+  int<lower=1> D;
   vector[T] y;
-  matrix[T, K] X;
+  matrix[T, D] X;
 }
 
 parameters {
   real mu;
   real phi_raw;
   real<lower=0> sigma_eta;
-  vector[K] beta;
+  vector[D] beta;
   vector[T] eta_raw;
   real<lower=0> nu_minus2;
 }
