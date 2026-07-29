@@ -10,6 +10,7 @@ data {
     vector[T] y;                            // observed log returns (percent)
     matrix[T-1, D] X;                       // exogenous covariates x_{t-1}, rows t=2..T
     int<lower=0, upper=1> use_student_t;    // 0 = Gaussian, 1 = Student-t
+    vector[D] x_forecast;
  }
 
  transformed data {
@@ -137,7 +138,7 @@ generated quantities{
         z_T[1] = h[T];
         z_T[2] = fmax(y[T], 0.0);
         z_T[3] = fmin(y[T], 0.0);
-        z_T[4:D_nn] = X[T]; // I add it
+        z_T[4:D_nn] = x_forecast; // I add it
 
         //Note: x_T must be passed separately for true forecasting;
         //here we use the last available row for illustration
