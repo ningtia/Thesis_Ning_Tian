@@ -1,16 +1,15 @@
 data {
   int<lower=2> T;
-  int<lower=1> K;
+  int<lower=1> D;
   vector[T] y;
-  matrix[T, K] X;
-  real h0_location;
+  matrix[T, D] X;
 }
 
 parameters {
   ordered[2] mu;
   vector<lower=0, upper=0.999>[2] phi;
   vector<lower=0>[2] sigma_eta;
-  vector[K] beta;
+  vector[D] beta;
   vector[T] h;
   real<lower=1e-6, upper=0.999999> p11;
   real<lower=1e-6, upper=0.999999> p22;
@@ -33,7 +32,7 @@ model {
   vector[2] pi_stat;
   real denom;
 
-  mu ~ normal(h0_location, 3);
+  mu ~ normal(0, 5);
   phi ~ beta(20, 1.5);
   sigma_eta ~ normal(0, 1);
   beta ~ normal(0, 1);
