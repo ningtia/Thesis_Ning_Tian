@@ -535,6 +535,7 @@ split_oos_forecasts <- function(bench,
   )
 }
 
+## TODO: need to fix this fuction
 stan_fit_diagnostics <- function(fit) {
   summary_fit <- summary(fit)$summary
   rhat <- summary_fit[, "Rhat"]
