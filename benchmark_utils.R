@@ -555,3 +555,217 @@ stan_fit_diagnostics <- function(fit) {
     divergence_sum = divergence_sum
   )
 }
+########## substitude
+# 第一次使用时，如果没有 posterior 包，会自动安装
+# if (!requireNamespace("posterior", quietly = TRUE)) {
+#   install.packages("posterior")
+# }
+
+# stan_fit_diagnostics <- function(fit) {
+
+#   # 确认传入的是 rstan 模型结果
+#   if (!inherits(fit, "stanfit")) {
+#     stop("fit 必须是 rstan 生成的 stanfit 对象。")
+#   }
+
+#   # ------------------------------------------------------------
+#   # 1. 提取 posterior draws
+#   # ------------------------------------------------------------
+
+#   draws_array <- rstan::extract(
+#     fit,
+#     permuted = FALSE,
+#     inc_warmup = FALSE
+#   )
+
+#   draws <- posterior::as_draws_array(draws_array)
+
+#   # 不检查 generated quantities
+#   variable_names <- posterior::variables(draws)
+
+#   remove_variables <- grepl(
+#     "^log_lik\\[|^filtered_prob\\[|^y_rep\\[|^lp__$",
+#     variable_names
+#   )
+
+#   keep_variables <- variable_names[!remove_variables]
+
+#   draws <- posterior::subset_draws(
+#     draws,
+#     variable = keep_variables
+#   )
+
+#   # ------------------------------------------------------------
+#   # 2. 计算 R-hat、bulk ESS、tail ESS
+#   # ------------------------------------------------------------
+
+#   summary_table <- posterior::summarise_draws(
+#     draws,
+#     "rhat",
+#     "ess_bulk",
+#     "ess_tail"
+#   )
+
+#   rhat_values <- summary_table$rhat[
+#     is.finite(summary_table$rhat)
+#   ]
+
+#   bulk_values <- summary_table$ess_bulk[
+#     is.finite(summary_table$ess_bulk)
+#   ]
+
+#   tail_values <- summary_table$ess_tail[
+#     is.finite(summary_table$ess_tail)
+#   ]
+
+#   max_rhat <- if (length(rhat_values) > 0) {
+#     max(rhat_values)
+#   } else {
+#     NA_real_
+#   }
+
+#   min_bulk_ess <- if (length(bulk_values) > 0) {
+#     min(bulk_values)
+#   } else {
+#     NA_real_
+#   }
+
+#   min_tail_ess <- if (length(tail_values) > 0) {
+#     min(tail_values)
+#   } else {
+#     NA_real_
+#   }
+
+#   # ------------------------------------------------------------
+#   # 3. 计算 divergences 和 E-BFMI
+#   # ------------------------------------------------------------
+
+#   sampler_params <- rstan::get_sampler_params(
+#     fit,
+#     inc_warmup = FALSE
+#   )
+
+#   divergences_by_chain <- sapply(
+#     sampler_params,
+#     function(chain) {
+#       sum(chain[, "divergent__"])
+#     }
+#   )
+
+#   divergence_sum <- sum(divergences_by_chain)
+
+#   ebfmi_by_chain <- sapply(
+#     sampler_params,
+#     function(chain) {
+#       energy <- chain[, "energy__"]
+
+#       if (length(energy) < 2 || var(energy) == 0) {
+#         return(NA_real_)
+#       }
+
+#       mean(diff(energy)^2) / var(energy)
+#     }
+#   )
+
+#   valid_ebfmi <- ebfmi_by_chain[
+#     is.finite(ebfmi_by_chain)
+#   ]
+
+#   min_ebfmi <- if (length(valid_ebfmi) > 0) {
+#     min(valid_ebfmi)
+#   } else {
+#     NA_real_
+#   }
+
+#   # ------------------------------------------------------------
+#   # 4. 判断是否通过老师要求
+#   # ------------------------------------------------------------
+
+#   rhat_pass <- !is.na(max_rhat) &&
+#     max_rhat < 1.01
+
+#   bulk_ess_pass <- !is.na(min_bulk_ess) &&
+#     min_bulk_ess > 400
+
+#   tail_ess_pass <- !is.na(min_tail_ess) &&
+#     min_tail_ess > 400
+
+#   divergence_pass <- divergence_sum == 0
+
+#   ebfmi_pass <- !is.na(min_ebfmi) &&
+#     min_ebfmi > 0.30
+
+#   all_pass <- all(
+#     rhat_pass,
+#     bulk_ess_pass,
+#     tail_ess_pass,
+#     divergence_pass,
+#     ebfmi_pass
+#   )
+
+#   # ------------------------------------------------------------
+#   # 5. 生成容易查看的结果表
+#   # ------------------------------------------------------------
+
+#   diagnostic_table <- data.frame(
+#     Diagnostic = c(
+#       "Maximum R-hat",
+#       "Minimum bulk ESS",
+#       "Minimum tail ESS",
+#       "Divergences",
+#       "Minimum E-BFMI"
+#     ),
+#     Value = c(
+#       max_rhat,
+#       min_bulk_ess,
+#       min_tail_ess,
+#       divergence_sum,
+#       min_ebfmi
+#     ),
+#     Requirement = c(
+#       "< 1.01",
+#       "> 400",
+#       "> 400",
+#       "= 0",
+#       "> 0.30"
+#     ),
+#     Passed = c(
+#       rhat_pass,
+#       bulk_ess_pass,
+#       tail_ess_pass,
+#       divergence_pass,
+#       ebfmi_pass
+#     ),
+#     stringsAsFactors = FALSE
+#   )
+
+#   print(diagnostic_table)
+
+#   if (all_pass) {
+#     message("全部 Stan 收敛诊断通过。")
+#   } else {
+#     warning("至少有一项 Stan 收敛诊断没有通过。")
+#   }
+
+#   # 返回结果，名称与 evaluate_results.R 对应
+#   list(
+#     max_rhat = max_rhat,
+#     min_bulk_ess = min_bulk_ess,
+#     min_tail_ess = min_tail_ess,
+#     divergence_sum = divergence_sum,
+#     min_ebfmi = min_ebfmi,
+
+#     rhat_pass = rhat_pass,
+#     bulk_ess_pass = bulk_ess_pass,
+#     tail_ess_pass = tail_ess_pass,
+#     divergence_pass = divergence_pass,
+#     ebfmi_pass = ebfmi_pass,
+#     all_pass = all_pass,
+
+#     divergences_by_chain = divergences_by_chain,
+#     ebfmi_by_chain = ebfmi_by_chain,
+
+#     table = diagnostic_table,
+#     parameter_diagnostics = summary_table
+#   )
+# }
