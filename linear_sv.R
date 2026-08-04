@@ -55,9 +55,9 @@ fit_linear_sv <- function(train_indices, previous_model, refit_id, bench) {
     chains = stan_chains,
     iter = stan_iter,
     warmup = stan_warmup,
-    seed = 666 + refit_id - 1L,
+    seed = 666,
     init = function() linear_sv_init(stan_data, previous_post),
-    control = list(adapt_delta = 0.95, max_treedepth = 12)
+    control = list(adapt_delta = 0.90, max_treedepth = 10)
   )
   post <- rstan::extract(fit)
   n_draws <- length(post$mu)
