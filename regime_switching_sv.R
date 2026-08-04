@@ -61,9 +61,9 @@ fit_ms_sv <- function(train_indices, previous_model, refit_id, bench) {
     chains = stan_chains,
     iter = stan_iter,
     warmup = stan_warmup,
-    seed = 1666 + refit_id - 1L,
+    seed = 1666,
     init = function() init_ms_sv(stan_data, previous_post),
-    control = list(adapt_delta = 0.97, max_treedepth = 13)
+    control = list(adapt_delta = 0.90, max_treedepth = 10)
   )
   post <- rstan::extract(fit)
   n_draws <- length(post$p11)
