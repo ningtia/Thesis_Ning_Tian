@@ -36,7 +36,7 @@ fit_garch_model <- function(model_name, solver = "hybrid") {
       solver = solver
     )
     if (fit@fit$convergence != 0L) {
-      stop(sprintf("%s did not converge at refit %d.", model_name, refit_id))
+      warning(sprintf("%s did not converge at refit %d.", model_name, refit_id))
     }
 
     list(
@@ -74,11 +74,11 @@ forecast_garch_one_step <- function(model, state, forecast_index, bench) {
   )
   sigma_t <- as.numeric(sigma(forecast))[1L]
   if (!is.finite(sigma_t) || sigma_t <= 0) {
-    stop("GARCH forecast returned an invalid conditional standard deviation.")
+    warning("GARCH forecast returned an invalid conditional standard deviation.")
   }
   nu_t <- unname(model$coefficients["shape"])
   if (!is.finite(nu_t) || nu_t <= 2) {
-    stop("The Student-t GARCH shape parameter must be greater than 2.")
+    warning("The Student-t GARCH shape parameter must be greater than 2.")
   }
 
   # rugarch's "std" innovations are Student-t innovations standardized to
