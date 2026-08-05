@@ -64,7 +64,7 @@ transformed parameters {
         z[1] = h[t-1];
         z[2] = y_pos[t-1];
         z[3] = y_neg[t-1];
-        z[4:D_nn] = X[t-1]’;
+        z[4:D_nn] = X[t-1]';
 
         //Forward pass: one hidden layer + bounded output
         vector[K] a = tanh(W1 * z + b1);
@@ -121,12 +121,10 @@ generated quantities{
     //One-step-ahead volatility forecast (h_{T+1} | data)
     real h_forecast;
     real vol_forecast;
-    real y_forecast;
-    real<lower=2> nu;
 
     //Log-likelihood computation
-    nu = nu_minus2 + 2;
     if(use_student_t){
+        real nu = nu_minus2[1] + 2;
         for (t in 1:T)
             log_lik[t] = student_t_lpdf(y[t] | nu, 0, exp(h[t] / 2));
     } else {
@@ -149,15 +147,8 @@ generated quantities{
         
         vector[K] a_T = tanh(W1 * z_T + b1);
         real nn_T = s * tanh(dot_product(w2, a_T) + b2);
-        h_forecast = mu + phi * (h[T] - mu)
-                     + x_forecast' * beta
-                     + nn_T
+        h_forecast = mu + phi * (h[T] - mu) + nn_T
                      + sigma_eta * normal_rng(0, 1);
         vol_forecast = exp(h_forecast / 2);
-        if (use_student_t) {
-            y_forecast = student_t_rng(nu, 0, vol_forecast);
-        } else {
-            y_forecast = normal_rng(0, vol_forecast);
-        }
     }
 }
