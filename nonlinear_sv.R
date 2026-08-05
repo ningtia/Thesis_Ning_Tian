@@ -139,79 +139,50 @@ nn_sv_init <- function(stan_data,
   d_nn <- stan_data$D + 3L
 
   if (!is.null(previous_post)) {
-    return(list(
+     init_values <-list(
       mu = stats::median(previous_post$mu),
       phi_raw = stats::median(previous_post$phi_raw),
       sigma_eta = max(stats::median(previous_post$sigma_eta), 1e-4),
-      beta = apply(previous_post$beta, 2, stats::median),
       W1 = apply(previous_post$W1, c(2, 3), stats::median),
       b1 = apply(previous_post$b1, 2, stats::median),
       w2 = apply(previous_post$w2, 2, stats::median),
       b2 = stats::median(previous_post$b2),
       s = max(stats::median(previous_post$s), 1e-4),
       tau_w = max(stats::median(previous_post$tau_w), 1e-4),
-      eta_raw = rep(0, stan_data$T),
-      nu_minus2 = max(stats::median(previous_post$nu_minus2), 1e-4)
-    ))
+      eta_raw = rep(0, stan_data$T)
+    )
+    if (stan_data$use_student_t == 1L) {
+      init_values$nu_minus2 <- max(
+        stats::median(previous_post$nu_minus2),
+        1e-4
+      )
+    }
+    return(init_values)
   }
 
   if (is.null(linear_start)) {
     linear_start <- preestimate_linear_sv(stan_data$y, stan_data$X)
   }
-  list(
+  init_values <- list(
     mu = linear_start$mu,
     phi_raw = linear_start$phi_raw,
     sigma_eta = linear_start$sigma_eta,
-    beta = linear_start$beta,
-    # Section 8.7: start the NN close to the linear-SV restriction.
     W1 = matrix(stats::rnorm(stan_data$K * d_nn, 0, 0.01), stan_data$K, d_nn),
     b1 = stats::rnorm(stan_data$K, 0, 0.01),
     w2 = stats::rnorm(stan_data$K, 0, 0.01),
     b2 = 0,
     s = 0.10,
     tau_w = 0.10,
-    eta_raw = rep(0, stan_data$T),
-    nu_minus2 = 8
+    eta_raw = rep(0, stan_data$T)
   )
-}
 
-nn_sv_sampler_diagnostics <- function(fit) {
-  summary_fit <- summary(fit)$summary
-  rhat <- if ("Rhat" %in% colnames(summary_fit)) summary_fit[, "Rhat"] else NA_real_
-  bulk_ess <- if ("n_eff" %in% colnames(summary_fit)) summary_fit[, "n_eff"] else NA_real_
-  sampler_params <- rstan::get_sampler_params(fit, inc_warmup = FALSE)
-  divergences <- sum(vapply(
-    sampler_params,
-    function(x) sum(x[, "divergent__"]),
-    numeric(1)
-  ))
-  ebfmi <- tryCatch(rstan::get_bfmi(fit), error = function(e) NA_real_)
-
-  # rstan reports n_eff but not modern tail-ESS.  When posterior is present,
-  # calculate it; otherwise explicitly mark this diagnostic as unavailable.
-  tail_ess <- NA_real_
-  if (requireNamespace("posterior", quietly = TRUE)) {
-    tail_ess <- tryCatch({
-      draws_array <- rstan::extract(fit, permuted = FALSE, inc_warmup = FALSE)
-      min(posterior::ess_tail(posterior::as_draws_array(draws_array)), na.rm = TRUE)
-    }, error = function(e) NA_real_)
+   if (stan_data$use_student_t == 1L) {
+    init_values$nu_minus2 <- 8
   }
 
-  list(
-    max_rhat = max(rhat, na.rm = TRUE),
-    min_bulk_ess = min(bulk_ess, na.rm = TRUE),
-    min_tail_ess = tail_ess,
-    divergence_sum = divergences,
-    min_ebfmi = min(ebfmi, na.rm = TRUE),
-    rhat_pass = all(rhat < 1.01, na.rm = TRUE),
-    bulk_ess_pass = all(bulk_ess > 400, na.rm = TRUE),
-    tail_ess_pass = is.na(tail_ess) || tail_ess > 400,
-    ebfmi_pass = all(ebfmi > 0.30, na.rm = TRUE),
-    rhat = rhat,
-    bulk_ess = bulk_ess,
-    ebfmi = ebfmi
-  )
+  init_values
 }
+
 
 assert_nn_sv_diagnostics <- function(diagnostics, strict = FALSE) {
   problems <- c(
@@ -243,19 +214,29 @@ summarize_draws <- function(x, parameter) {
 }
 
 summarize_nn_sv_posterior <- function(post, dates) {
-  parameter_summary <- do.call(rbind, list(
+
+  parameter_parts <- list(
     summarize_draws(post$mu, "mu"),
     summarize_draws(tanh(post$phi_raw), "phi"),
     summarize_draws(post$sigma_eta, "sigma_eta"),
     summarize_draws(post$tau_w, "tau_w"),
     summarize_draws(post$s, "s"),
-    summarize_draws(post$b2, "b2"),
-    summarize_draws(post$nu_minus2 + 2, "nu"),
-    do.call(rbind, lapply(seq_len(ncol(post$beta)), function(j) {
-      summarize_draws(post$beta[, j], paste0("beta[", j, "]"))
-    }))
-  ))
+    summarize_draws(post$b2, "b2")
+  )
+
+  if (!is.null(post$nu_minus2) && length(post$nu_minus2) > 0L) {
+    parameter_parts <- append(parameter_parts,
+      list(summarize_draws(
+          post$nu_minus2 + 2, "nu")))
+  }
+
+  parameter_summary <- do.call(
+    rbind, parameter_parts
+  )
+
+
   volatility_draws <- exp(post$h / 2)
+  
   filtered_volatility <- data.frame(
     Date = as.Date(dates),
     mean = colMeans(volatility_draws),
@@ -272,11 +253,13 @@ summarize_nn_sv_posterior <- function(post, dates) {
 }
 
 nn_transition <- function(post, draw_index, h_previous, y_previous, x_t) {
+
   n_draws <- length(draw_index)
   y_positive <- max(y_previous, 0)
   y_negative <- min(y_previous, 0)
 
   nn_component <- vapply(seq_len(n_draws), function(i) {
+
     draw <- draw_index[i]
     z <- c(h_previous[i], y_positive, y_negative, x_t)
     hidden <- tanh(as.vector(post$W1[draw, , ] %*% z) + post$b1[draw, ])
@@ -284,8 +267,7 @@ nn_transition <- function(post, draw_index, h_previous, y_previous, x_t) {
   }, numeric(1))
 
   post$mu[draw_index] +
-    tanh(post$phi_raw[draw_index]) * (h_previous - post$mu[draw_index]) +
-    as.vector(post$beta[draw_index, , drop = FALSE] %*% x_t) +
+    tanh(post$phi_raw[draw_index]) * (h_previous - post$mu[draw_index]) + 
     nn_component
 }
 
@@ -416,7 +398,7 @@ fit_nonlinear_sv <- function(bench,
     )
   )
   post <- rstan::extract(fit)
-  diagnostics <- nn_sv_sampler_diagnostics(fit)
+  diagnostics <- stan_fit_diagnostics(fit)
   assert_nn_sv_diagnostics(diagnostics, strict = strict_diagnostics)
 
   forecast_index <- if (is.null(forecast_index)) {
