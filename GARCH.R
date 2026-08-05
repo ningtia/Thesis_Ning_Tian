@@ -43,7 +43,7 @@ fit_garch_model <- function(model_name, solver = "hybrid") {
       model = list(
         model_name = model_name,
         solver = solver,
-        coefficients = stats::coef(fit)
+        coefficients = fit@fit$coef
       ),
       # Between quarterly re-estimations this index grows by one observation;
       # the fixed-parameter spec is filtered, not re-estimated.
