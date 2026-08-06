@@ -70,6 +70,22 @@ fit_ms_sv <- function(train_indices, previous_model, refit_id, bench) {
   last_t <- length(train_indices)
   p_regime_1 <- post$filtered_prob[, last_t, 1]
 
+  ms_diagnostic_pars <- c(
+  "mu",
+  "phi",
+  "sigma_eta",
+  "beta",
+  "p11",
+  "p22",
+  "nu_minus2",
+  "h")
+
+  diagnostics = stan_fit_diagnostics(fit, pars = ms_diagnostic_pars)
+  assert_stan_diagnostics(
+    diagnostics = diagnostics,
+    model_name = sprintf("Regime-switching SV refit %d", refit_id),
+    strict = FALSE)
+
   list(
     model = list(posterior = post),
     state = list(
@@ -78,7 +94,7 @@ fit_ms_sv <- function(train_indices, previous_model, refit_id, bench) {
       draw_index = seq_len(n_draws)
     ),
     fit = fit,
-    diagnostics = stan_fit_diagnostics(fit)
+    diagnostics = diagnostics
   )
 }
 
