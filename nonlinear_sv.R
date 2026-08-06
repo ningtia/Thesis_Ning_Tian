@@ -184,23 +184,6 @@ nn_sv_init <- function(stan_data,
 }
 
 
-assert_nn_sv_diagnostics <- function(diagnostics, strict = FALSE) {
-  problems <- c(
-    if (!isTRUE(diagnostics$rhat_pass)) "R-hat >= 1.01",
-    if (!isTRUE(diagnostics$bulk_ess_pass)) "bulk-ESS <= 400",
-    if (!is.na(diagnostics$min_tail_ess) && !isTRUE(diagnostics$tail_ess_pass)) "tail-ESS <= 400",
-    if (diagnostics$divergence_sum > 0) "divergent transitions",
-    if (!isTRUE(diagnostics$ebfmi_pass)) "E-BFMI <= 0.30"
-  )
-  if (length(problems) > 0L) {
-    message("NN-SV diagnostic warning: ", paste(problems, collapse = "; "), ".")
-    if (isTRUE(strict)) {
-      stop("NN-SV convergence checks failed.")
-    }
-  }
-  invisible(diagnostics)
-}
-
 summarize_draws <- function(x, parameter) {
   x <- as.numeric(x)
   data.frame(
@@ -335,26 +318,6 @@ compute_nn_sv_loo <- function(log_lik) {
   list(available = TRUE, result = result, message = NULL)
 }
 
-save_nn_sv_diagnostic_plots <- function(fit,
-                                        file = "diagnostics_nonlinearSV.pdf",
-                                        pars = c("mu", "phi_raw", "sigma_eta", "tau_w", "s")) {
-  if (!requireNamespace("bayesplot", quietly = TRUE)) {
-    warning("Package 'bayesplot' is not installed; diagnostic plots were skipped.")
-    return(invisible(FALSE))
-  }
-  available <- intersect(pars, fit@model_pars)
-  if (length(available) == 0L) return(invisible(FALSE))
-
-  draws <- as.matrix(fit, pars = available)
-  grDevices::pdf(file, width = 10, height = 7)
-  on.exit(grDevices::dev.off(), add = TRUE)
-  print(bayesplot::mcmc_trace(draws, pars = available))
-  print(bayesplot::mcmc_rank_hist(draws, pars = available))
-  if (length(available) >= 2L) {
-    print(bayesplot::mcmc_pairs(draws, pars = available[1:2]))
-  }
-  invisible(TRUE)
-}
 
 # Single complete NN-SV estimation.  This function is useful for the
 # validation architecture runs and also for an in-sample estimation appendix.
@@ -398,8 +361,26 @@ fit_nonlinear_sv <- function(bench,
     )
   )
   post <- rstan::extract(fit)
-  diagnostics <- stan_fit_diagnostics(fit)
-  assert_nn_sv_diagnostics(diagnostics, strict = strict_diagnostics)
+
+  nn_diagnostic_pars <- c(
+    "mu",
+    "phi",
+    "sigma_eta",
+    "beta",
+    "W1",
+    "b1",
+    "w2",
+    "b2",
+    "s",
+    "tau_w",
+    "nu_minus2",
+    "h")
+
+  diagnostics <- stan_fit_diagnostics(fit, pars = nn_diagnostic_pars)
+  assert_stan_diagnostics(
+    diagnostics = diagnostics,
+    model_name = "Nonlinear SV",
+    strict = strict_diagnostics)
 
   forecast_index <- if (is.null(forecast_index)) {
     min(max(train_indices) + 1L, nrow(bench$all))
@@ -414,8 +395,24 @@ fit_nonlinear_sv <- function(bench,
   )
 
   if (isTRUE(make_diagnostic_plots)) {
-    save_nn_sv_diagnostic_plots(fit, diagnostic_plot_file)
-  }
+  save_stan_diagnostic_plots(
+    fit = fit,
+    file = diagnostic_plot_file,
+    pars = c(
+      "mu",
+      "phi",
+      "sigma_eta",
+      "tau_w",
+      "s"
+    ),
+    pairs_pars = c(
+      "phi",
+      "sigma_eta",
+      "tau_w",
+      "s"
+    )
+  )
+}
 
   list(
     fit = fit,
