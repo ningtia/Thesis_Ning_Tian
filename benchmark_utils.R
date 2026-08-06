@@ -1,3 +1,5 @@
+install.packages(c("posterior", "bayesplot"))
+
 default_benchmark_target <- function() {
   "y_IQQH_EUR"
 }
@@ -535,237 +537,318 @@ split_oos_forecasts <- function(bench,
   )
 }
 
-## TODO: need to fix this fuction
-stan_fit_diagnostics <- function(fit) {
-  summary_fit <- summary(fit)$summary
-  rhat <- summary_fit[, "Rhat"]
-  bulk_ess <- summary_fit[, "n_eff"]
 
-  sampler_params <- rstan::get_sampler_params(fit, inc_warmup = FALSE)
-  divergence_sum <- sum(sapply(
+stan_fit_diagnostics <- function(
+    fit,
+    pars = NULL,
+    rhat_limit = 1.01,
+    ess_limit = 400,
+    ebfmi_limit = 0.30
+) {
+  finite_min <- function(x) {
+    x <- as.numeric(x)
+    x <- x[is.finite(x)]
+    if (length(x) == 0L) NA_real_ else min(x)
+  }
+
+  finite_max <- function(x) {
+    x <- as.numeric(x)
+    x <- x[is.finite(x)]
+    if (length(x) == 0L) NA_real_ else max(x)
+  }
+
+
+  available_pars <- if (is.null(pars)) {
+    fit@model_pars
+  } else {
+    intersect(pars, fit@model_pars)
+  }
+
+  # iteration × chain × parameter
+  raw_draws <- rstan::extract(
+    fit,
+    pars = available_pars,
+    permuted = FALSE,
+    inc_warmup = FALSE
+  )
+
+  draws <- posterior::as_draws_array(raw_draws)
+
+  parameter_summary <- posterior::summarise_draws(
+    draws,
+    rhat = posterior::rhat,
+    ess_bulk = posterior::ess_bulk,
+    ess_tail = posterior::ess_tail
+  )
+
+  parameter_summary <- as.data.frame(parameter_summary)
+
+  rhat <- stats::setNames(
+    parameter_summary$rhat,
+    parameter_summary$variable
+  )
+
+  bulk_ess <- stats::setNames(
+    parameter_summary$ess_bulk,
+    parameter_summary$variable
+  )
+
+  tail_ess <- stats::setNames(
+    parameter_summary$ess_tail,
+    parameter_summary$variable
+  )
+
+  # HMC sampler of every chain
+  sampler_params <- rstan::get_sampler_params(
+    fit,
+    inc_warmup = FALSE
+  )
+
+  divergence_by_chain <- vapply(
     sampler_params,
-    function(x) sum(x[, "divergent__"])
-  ))
+    function(chain) {
+      sum(chain[, "divergent__"] > 0, na.rm = TRUE)
+    },
+    numeric(1)
+  )
+
+  names(divergence_by_chain) <- paste0(
+    "chain_",
+    seq_along(divergence_by_chain)
+  )
+
+  divergence_sum <- sum(divergence_by_chain)
+
+  # E-BFMI
+  ebfmi_by_chain <- tryCatch(
+    as.numeric(rstan::get_bfmi(fit)),
+    error = function(e) {
+      warning(
+        "E-BFMI could not be calculated: ",
+        conditionMessage(e)
+      )
+      rep(NA_real_, length(sampler_params))
+    }
+  )
+
+  names(ebfmi_by_chain) <- paste0(
+    "chain_",
+    seq_along(ebfmi_by_chain)
+  )
+
+  max_rhat <- finite_max(rhat)
+  min_bulk_ess <- finite_min(bulk_ess)
+  min_tail_ess <- finite_min(tail_ess)
+  min_ebfmi <- finite_min(ebfmi_by_chain)
+
+  checks <- list(
+    rhat_ok = is.finite(max_rhat) &&
+      max_rhat < rhat_limit,
+
+    bulk_ess_ok = is.finite(min_bulk_ess) &&
+      min_bulk_ess > ess_limit,
+
+    tail_ess_ok = is.finite(min_tail_ess) &&
+      min_tail_ess > ess_limit,
+
+    divergences_ok = divergence_sum == 0L,
+
+    ebfmi_ok = is.finite(min_ebfmi) &&
+      min_ebfmi > ebfmi_limit
+  )
 
   list(
-    max_rhat = max(rhat, na.rm = TRUE),
-    min_bulk_ess = min(bulk_ess, na.rm = TRUE),
+    max_rhat = max_rhat,
+    min_bulk_ess = min_bulk_ess,
+    min_tail_ess = min_tail_ess,
+    divergence_sum = divergence_sum,
+    min_ebfmi = min_ebfmi,
+
     rhat = rhat,
     bulk_ess = bulk_ess,
-    divergence_sum = divergence_sum
+    tail_ess = tail_ess,
+    parameter_table = parameter_summary,
+
+    divergence_by_chain = divergence_by_chain,
+    ebfmi_by_chain = ebfmi_by_chain,
+
+    checks = checks,
+
+    rhat_pass = checks$rhat_ok,
+    bulk_ess_pass = checks$bulk_ess_ok,
+    tail_ess_pass = checks$tail_ess_ok,
+    ebfmi_pass = checks$ebfmi_ok,
+
+    all_checks_passed = all(unlist(checks)),
+
+    thresholds = list(
+      rhat = rhat_limit,
+      bulk_ess = ess_limit,
+      tail_ess = ess_limit,
+      ebfmi = ebfmi_limit
+    )
   )
 }
-########## substitude
-# 第一次使用时，如果没有 posterior 包，会自动安装
-# if (!requireNamespace("posterior", quietly = TRUE)) {
-#   install.packages("posterior")
-# }
 
-# stan_fit_diagnostics <- function(fit) {
 
-#   # 确认传入的是 rstan 模型结果
-#   if (!inherits(fit, "stanfit")) {
-#     stop("fit 必须是 rstan 生成的 stanfit 对象。")
-#   }
+assert_stan_diagnostics <- function(
+    diagnostics,
+    model_name = "Stan model",
+    strict = FALSE
+) {
+  problems <- character()
 
-#   # ------------------------------------------------------------
-#   # 1. 提取 posterior draws
-#   # ------------------------------------------------------------
+  if (!isTRUE(diagnostics$checks$rhat_ok)) {
+    problems <- c(
+      problems,
+      sprintf(
+        "max R-hat = %.4f, required < 1.01",
+        diagnostics$max_rhat
+      )
+    )
+  }
 
-#   draws_array <- rstan::extract(
-#     fit,
-#     permuted = FALSE,
-#     inc_warmup = FALSE
-#   )
+  if (!isTRUE(diagnostics$checks$bulk_ess_ok)) {
+    problems <- c(
+      problems,
+      sprintf(
+        "min bulk-ESS = %.1f, required > 400",
+        diagnostics$min_bulk_ess
+      )
+    )
+  }
 
-#   draws <- posterior::as_draws_array(draws_array)
+  if (!isTRUE(diagnostics$checks$tail_ess_ok)) {
+    problems <- c(
+      problems,
+      sprintf(
+        "min tail-ESS = %.1f, required > 400",
+        diagnostics$min_tail_ess
+      )
+    )
+  }
 
-#   # 不检查 generated quantities
-#   variable_names <- posterior::variables(draws)
+  if (!isTRUE(diagnostics$checks$divergences_ok)) {
+    problems <- c(
+      problems,
+      sprintf(
+        "%d divergent transitions",
+        diagnostics$divergence_sum
+      )
+    )
+  }
 
-#   remove_variables <- grepl(
-#     "^log_lik\\[|^filtered_prob\\[|^y_rep\\[|^lp__$",
-#     variable_names
-#   )
+  if (!isTRUE(diagnostics$checks$ebfmi_ok)) {
+    problems <- c(
+      problems,
+      sprintf(
+        "min E-BFMI = %.3f, required > 0.30",
+        diagnostics$min_ebfmi
+      )
+    )
+  }
 
-#   keep_variables <- variable_names[!remove_variables]
+  if (length(problems) > 0L) {
+    diagnostic_message <- paste0(
+      model_name,
+      " diagnostics failed: ",
+      paste(problems, collapse = "; "),
+      "."
+    )
 
-#   draws <- posterior::subset_draws(
-#     draws,
-#     variable = keep_variables
-#   )
+    if (isTRUE(strict)) {
+      stop(diagnostic_message, call. = FALSE)
+    } else {
+      warning(diagnostic_message, call. = FALSE)
+    }
+  }
 
-#   # ------------------------------------------------------------
-#   # 2. 计算 R-hat、bulk ESS、tail ESS
-#   # ------------------------------------------------------------
+  invisible(diagnostics)
+}
 
-#   summary_table <- posterior::summarise_draws(
-#     draws,
-#     "rhat",
-#     "ess_bulk",
-#     "ess_tail"
-#   )
 
-#   rhat_values <- summary_table$rhat[
-#     is.finite(summary_table$rhat)
-#   ]
 
-#   bulk_values <- summary_table$ess_bulk[
-#     is.finite(summary_table$ess_bulk)
-#   ]
+save_stan_diagnostic_plots <- function(
+    fit,
+    file,
+    pars,
+    pairs_pars = NULL
+) {
+  if (!inherits(fit, "stanfit")) {
+    stop("fit must be an rstan stanfit object.", call. = FALSE)
+  }
 
-#   tail_values <- summary_table$ess_tail[
-#     is.finite(summary_table$ess_tail)
-#   ]
+  if (!requireNamespace("bayesplot", quietly = TRUE)) {
+    warning(
+      "Package 'bayesplot' is not installed; plots were skipped.",
+      call. = FALSE
+    )
+    return(invisible(FALSE))
+  }
 
-#   max_rhat <- if (length(rhat_values) > 0) {
-#     max(rhat_values)
-#   } else {
-#     NA_real_
-#   }
+  available_pars <- intersect(
+    pars,
+    fit@model_pars
+  )
 
-#   min_bulk_ess <- if (length(bulk_values) > 0) {
-#     min(bulk_values)
-#   } else {
-#     NA_real_
-#   }
+  if (length(available_pars) == 0L) {
+    warning(
+      "None of the requested plotting parameters exists in fit.",
+      call. = FALSE
+    )
+    return(invisible(FALSE))
+  }
 
-#   min_tail_ess <- if (length(tail_values) > 0) {
-#     min(tail_values)
-#   } else {
-#     NA_real_
-#   }
+  # keep iteration × chain × parameter。
+  draws_array <- rstan::extract(
+    fit,
+    pars = available_pars,
+    permuted = FALSE,
+    inc_warmup = FALSE
+  )
 
-#   # ------------------------------------------------------------
-#   # 3. 计算 divergences 和 E-BFMI
-#   # ------------------------------------------------------------
+  if (is.null(pairs_pars)) {
+    pairs_pars <- head(available_pars, 4L)
+  } else {
+    pairs_pars <- intersect(
+      pairs_pars,
+      available_pars
+    )
+  }
 
-#   sampler_params <- rstan::get_sampler_params(
-#     fit,
-#     inc_warmup = FALSE
-#   )
+  grDevices::pdf(
+    file = file,
+    width = 11,
+    height = 8
+  )
 
-#   divergences_by_chain <- sapply(
-#     sampler_params,
-#     function(chain) {
-#       sum(chain[, "divergent__"])
-#     }
-#   )
+  on.exit(
+    grDevices::dev.off(),
+    add = TRUE
+  )
 
-#   divergence_sum <- sum(divergences_by_chain)
+  print(
+    bayesplot::mcmc_trace(
+      draws_array,
+      pars = available_pars
+    )
+  )
 
-#   ebfmi_by_chain <- sapply(
-#     sampler_params,
-#     function(chain) {
-#       energy <- chain[, "energy__"]
+  print(
+    bayesplot::mcmc_rank_hist(
+      draws_array,
+      pars = available_pars
+    )
+  )
 
-#       if (length(energy) < 2 || var(energy) == 0) {
-#         return(NA_real_)
-#       }
+  if (length(pairs_pars) >= 2L) {
+    print(
+      bayesplot::mcmc_pairs(
+        draws_array,
+        pars = pairs_pars
+      )
+    )
+  }
 
-#       mean(diff(energy)^2) / var(energy)
-#     }
-#   )
-
-#   valid_ebfmi <- ebfmi_by_chain[
-#     is.finite(ebfmi_by_chain)
-#   ]
-
-#   min_ebfmi <- if (length(valid_ebfmi) > 0) {
-#     min(valid_ebfmi)
-#   } else {
-#     NA_real_
-#   }
-
-#   # ------------------------------------------------------------
-#   # 4. 判断是否通过老师要求
-#   # ------------------------------------------------------------
-
-#   rhat_pass <- !is.na(max_rhat) &&
-#     max_rhat < 1.01
-
-#   bulk_ess_pass <- !is.na(min_bulk_ess) &&
-#     min_bulk_ess > 400
-
-#   tail_ess_pass <- !is.na(min_tail_ess) &&
-#     min_tail_ess > 400
-
-#   divergence_pass <- divergence_sum == 0
-
-#   ebfmi_pass <- !is.na(min_ebfmi) &&
-#     min_ebfmi > 0.30
-
-#   all_pass <- all(
-#     rhat_pass,
-#     bulk_ess_pass,
-#     tail_ess_pass,
-#     divergence_pass,
-#     ebfmi_pass
-#   )
-
-#   # ------------------------------------------------------------
-#   # 5. 生成容易查看的结果表
-#   # ------------------------------------------------------------
-
-#   diagnostic_table <- data.frame(
-#     Diagnostic = c(
-#       "Maximum R-hat",
-#       "Minimum bulk ESS",
-#       "Minimum tail ESS",
-#       "Divergences",
-#       "Minimum E-BFMI"
-#     ),
-#     Value = c(
-#       max_rhat,
-#       min_bulk_ess,
-#       min_tail_ess,
-#       divergence_sum,
-#       min_ebfmi
-#     ),
-#     Requirement = c(
-#       "< 1.01",
-#       "> 400",
-#       "> 400",
-#       "= 0",
-#       "> 0.30"
-#     ),
-#     Passed = c(
-#       rhat_pass,
-#       bulk_ess_pass,
-#       tail_ess_pass,
-#       divergence_pass,
-#       ebfmi_pass
-#     ),
-#     stringsAsFactors = FALSE
-#   )
-
-#   print(diagnostic_table)
-
-#   if (all_pass) {
-#     message("全部 Stan 收敛诊断通过。")
-#   } else {
-#     warning("至少有一项 Stan 收敛诊断没有通过。")
-#   }
-
-#   # 返回结果，名称与 evaluate_results.R 对应
-#   list(
-#     max_rhat = max_rhat,
-#     min_bulk_ess = min_bulk_ess,
-#     min_tail_ess = min_tail_ess,
-#     divergence_sum = divergence_sum,
-#     min_ebfmi = min_ebfmi,
-
-#     rhat_pass = rhat_pass,
-#     bulk_ess_pass = bulk_ess_pass,
-#     tail_ess_pass = tail_ess_pass,
-#     divergence_pass = divergence_pass,
-#     ebfmi_pass = ebfmi_pass,
-#     all_pass = all_pass,
-
-#     divergences_by_chain = divergences_by_chain,
-#     ebfmi_by_chain = ebfmi_by_chain,
-
-#     table = diagnostic_table,
-#     parameter_diagnostics = summary_table
-#   )
-# }
+  invisible(TRUE)
+}
