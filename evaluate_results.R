@@ -26,12 +26,6 @@ available_forecast_models <- function(benchmark_results) {
   names(Filter(function(x) !is.null(x$forecast_table), benchmark_results))
 }
 
-qlike_loss <- function(actual_return, forecast_variance) {
-  actual_variance <- pmax(actual_return^2, .Machine$double.eps)
-  forecast_variance <- pmax(forecast_variance, .Machine$double.eps)
-  actual_variance / forecast_variance - log(actual_variance / forecast_variance) - 1
-}
-
 fz0_score <- function(actual_return, VaR, ES, alpha) {
   # Fissler--Ziegel FZ0 joint score for lower-tail return VaR and ES.  ES must
   # be negative and no greater than VaR for this score to be well defined.
@@ -201,7 +195,7 @@ loss_matrix <- function(benchmark_results,
     forecast <- model_test_forecasts(benchmark_results[[model_name]], model_name)
     value <- switch(
       loss,
-      qlike = qlike_loss(forecast$actual_return, forecast$variance),
+      qlike = qlike(forecast$actual_return, forecast$variance),
       negative_lps = -forecast$log_score,
       fz05 = fz0_score(forecast$actual_return, forecast$VaR_05, forecast$ES_05, 0.05)
     )
@@ -572,7 +566,7 @@ overall_evaluation_table <- function(bench, benchmark_results,
   portfolio <- portfolio_table(benchmark_results)
   qlike <- do.call(rbind, lapply(available_forecast_models(benchmark_results), function(model_name) {
     forecast <- model_test_forecasts(benchmark_results[[model_name]], model_name)
-    data.frame(Model = model_name, QLIKE = mean(qlike_loss(
+    data.frame(Model = model_name, QLIKE = mean(qlike(
       forecast$actual_return, forecast$variance
     )))
   }))
