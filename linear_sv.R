@@ -62,14 +62,29 @@ fit_linear_sv <- function(train_indices, previous_model, refit_id, bench) {
   post <- rstan::extract(fit)
   n_draws <- length(post$mu)
 
+  linear_diagnostic_pars <- c(
+  "mu",
+  "phi_raw",
+  "phi",
+  "sigma_eta",
+  "beta",
+  "nu_minus2",
+  "h")
+
+  diagnostics = stan_fit_diagnostics(fit, pars = linear_diagnostic_pars)
+
+  assert_stan_diagnostics(
+    diagnostics = diagnostics,
+    model_name = "Linear SV",
+    strict = FALSE)
+
   list(
     model = list(posterior = post),
     state = list(
       h = post$h[, length(train_indices)],
-      draw_index = seq_len(n_draws)
-    ),
+      draw_index = seq_len(n_draws)),
     fit = fit,
-    diagnostics = stan_fit_diagnostics(fit)
+    diagnostics = diagnostics
   )
 }
 
