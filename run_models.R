@@ -12,6 +12,8 @@ MODELS_TO_RUN <- "all"
 # MODELS_TO_RUN <- c("sGARCH", "gjrGARCH", "eGARCH")
 # MODELS_TO_RUN <- "linearSV"
 # MODELS_TO_RUN <- c("linearSV", "nonlinearSV")
+# MODELS_TO_RUN <- "harRV"
+# MODELS_TO_RUN <- "regimeSwitchingSV"
 # MODELS_TO_RUN <- character(0)
 
 FORCE_RERUN <- FALSE          # TRUE = overwrite selected saved models
@@ -47,15 +49,13 @@ first_file <- function(x, required = TRUE) {
 
 FILES <- list(
   utils = first_file("benchmark_utils.R"),
-  garch = first_file(c("garch_benchmarks.R", "garch_models.R",
-                       "garch.R", "run_garch.R"), FALSE),
-  linear = first_file(c("linear_sv.R", "run_linear_sv.R"), FALSE),
-  ms = first_file(c("regime_switching_sv.R", "ms_sv.R",
-                    "run_ms_sv.R"), FALSE),
-  nn = first_file(c("nonlinear_sv.R", "run_nn_sv.R"), FALSE),
-  har = first_file(c("har_rv.R", "HAR_RV.R", "run_har_rv.R"), FALSE),
-  evaluation = first_file(c("evaluate_results.R",
-                            "evaluate_all_models.R"), FALSE)
+  garch = first_file(c("GARCH.R"), FALSE),
+  linear = first_file(c("linear_sv.R"), FALSE),
+  ms = first_file(c("regime_switching_sv.R"), FALSE),
+  har = first_file(c("HAR_RV.R"), FALSE),
+  nn = first_file(c("nonlinear_sv.R"), FALSE),
+
+  evaluation = first_file(c("evaluate_results.R"), FALSE)
 )
 
 # ========================== 3. GLOBAL OPTIONS ================================
