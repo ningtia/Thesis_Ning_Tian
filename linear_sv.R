@@ -1,17 +1,6 @@
-library(rstan)
-
-source("benchmark_utils.R")
-
-rstan_options(auto_write = TRUE)
-options(mc.cores = parallel::detectCores())
-
-refit_every <- getOption("benchmark.refit_every", 13L)
-save_rolling_fits <- getOption("benchmark.save_fits", FALSE)
-stan_iter <- getOption("benchmark.stan_iter", 4000L)
-stan_warmup <- getOption("benchmark.stan_warmup", 2000L)
-stan_chains <- getOption("benchmark.stan_chains", 4L)
-
-bench <- load_benchmark_data()
+if (!exists("rolling_forecast", mode = "function", inherits = TRUE)) {
+  source("benchmark_utils.R")
+}
 
 linear_sv_stan_data <- function(bench, train_indices) {
   y_train <- bench$y_all[train_indices]
@@ -45,47 +34,60 @@ linear_sv_init <- function(stan_data, previous_post = NULL) {
   )
 }
 
-fit_linear_sv <- function(train_indices, previous_model, refit_id, bench) {
-  stan_data <- linear_sv_stan_data(bench, train_indices)
-  previous_post <- if (is.null(previous_model)) NULL else previous_model$posterior
+make_linear_sv_fitter <- function(chains,
+                                  iter,
+                                  warmup,
+                                  seed,
+                                  adapt_delta,
+                                  max_treedepth) {
+  force(chains)
+  force(iter)
+  force(warmup)
+  force(seed)
+  force(adapt_delta)
+  force(max_treedepth)
 
-  fit <- rstan::stan(
-    file = "linear_sv.stan",
-    data = stan_data,
-    chains = stan_chains,
-    iter = stan_iter,
-    warmup = stan_warmup,
-    seed = 666,
-    init = function() linear_sv_init(stan_data, previous_post),
-    control = list(adapt_delta = 0.90, max_treedepth = 10)
-  )
-  post <- rstan::extract(fit)
-  n_draws <- length(post$mu)
+  function(train_indices, previous_model, refit_id, bench) {
+    stan_data <- linear_sv_stan_data(bench, train_indices)
+    previous_post <- if (is.null(previous_model)) NULL else previous_model$posterior
 
-  linear_diagnostic_pars <- c(
-  "mu",
-  "phi_raw",
-  "phi",
-  "sigma_eta",
-  "beta",
-  "nu_minus2",
-  "h")
+    fit <- rstan::stan(
+      file = "linear_sv.stan",
+      data = stan_data,
+      chains = chains,
+      iter = iter,
+      warmup = warmup,
+      seed = as.integer(seed) + as.integer(refit_id) - 1L,
+      init = function() linear_sv_init(stan_data, previous_post),
+      control = list(
+        adapt_delta = adapt_delta,
+        max_treedepth = max_treedepth
+      )
+    )
+    post <- rstan::extract(fit)
+    n_draws <- length(post$mu)
 
-  diagnostics = stan_fit_diagnostics(fit, pars = linear_diagnostic_pars)
+    linear_diagnostic_pars <- c(
+      "mu", "phi_raw", "phi", "sigma_eta", "beta", "nu_minus2", "h"
+    )
 
-  assert_stan_diagnostics(
-    diagnostics = diagnostics,
-    model_name = "Linear SV",
-    strict = FALSE)
+    diagnostics <- stan_fit_diagnostics(fit, pars = linear_diagnostic_pars)
+    assert_stan_diagnostics(
+      diagnostics = diagnostics,
+      model_name = "Linear SV",
+      strict = FALSE
+    )
 
-  list(
-    model = list(posterior = post),
-    state = list(
-      h = post$h[, length(train_indices)],
-      draw_index = seq_len(n_draws)),
-    fit = fit,
-    diagnostics = diagnostics
-  )
+    list(
+      model = list(posterior = post),
+      state = list(
+        h = post$h[, length(train_indices)],
+        draw_index = seq_len(n_draws)
+      ),
+      fit = fit,
+      diagnostics = diagnostics
+    )
+  }
 }
 
 forecast_linear_sv_one_step <- function(model, state, forecast_index, bench) {
@@ -124,19 +126,43 @@ update_linear_sv_state <- function(model, state, forecast, observed_y,
   )
 }
 
-rolling_linear_sv <- rolling_forecast(
-  bench = bench,
-  fit_model = fit_linear_sv,
-  forecast_one_step = forecast_linear_sv_one_step,
-  update_state = update_linear_sv_state,
-  refit_every = refit_every,
-  model_name = "linearSV",
-  save_fits = save_rolling_fits,
-  seed = 666
-)
-rolling_linear_sv$posterior <- rolling_linear_sv$model$posterior
+run_linear_sv <- function(bench = load_benchmark_data(),
+                          refit_every = getOption("benchmark.refit_every", 13L),
+                          save_fits = getOption("benchmark.save_fits", FALSE),
+                          seed = 666L,
+                          chains = getOption("benchmark.stan_chains", 4L),
+                          iter = getOption("benchmark.stan_iter", 4000L),
+                          warmup = getOption("benchmark.stan_warmup", 2000L),
+                          adapt_delta = getOption("benchmark.stan_adapt_delta", 0.90),
+                          max_treedepth = getOption("benchmark.stan_max_treedepth", 10L)) {
+  rstan::rstan_options(auto_write = TRUE)
+  cores <- parallel::detectCores(logical = TRUE)
+  if (is.na(cores)) cores <- 1L
+  options(mc.cores = min(as.integer(chains), cores))
 
-if (!exists("benchmark_results")) {
-  benchmark_results <- list()
+  result <- rolling_forecast(
+    bench = bench,
+    fit_model = make_linear_sv_fitter(
+      chains = chains,
+      iter = iter,
+      warmup = warmup,
+      seed = seed,
+      adapt_delta = adapt_delta,
+      max_treedepth = max_treedepth
+    ),
+    forecast_one_step = forecast_linear_sv_one_step,
+    update_state = update_linear_sv_state,
+    refit_every = refit_every,
+    model_name = "linearSV",
+    save_fits = save_fits,
+    seed = seed
+  )
+  result$posterior <- result$model$posterior
+  result
 }
-benchmark_results$linearSV <- rolling_linear_sv
+
+if (isTRUE(getOption("benchmark.linear_sv_autorun", FALSE))) {
+  bench <- load_benchmark_data()
+  if (!exists("benchmark_results")) benchmark_results <- list()
+  benchmark_results$linearSV <- run_linear_sv(bench = bench)
+}
