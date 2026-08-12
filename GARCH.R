@@ -1,10 +1,8 @@
-library(rugarch)
+# library(rugarch)
 
-source("benchmark_utils.R")
-
-refit_every <- getOption("benchmark.refit_every", 13L)
-garch_predictive_draws <- getOption("benchmark.garch_predictive_draws", 5000L)
-bench <- load_benchmark_data()
+if (!exists("rolling_forecast", mode = "function", inherits = TRUE)) {
+  source("benchmark_utils.R")
+}
 
 make_garch_spec <- function(model_name, x, fixed_pars = list(), start_pars = list()) {
   rugarch::ugarchspec(
@@ -72,7 +70,7 @@ forecast_garch_one_step <- function(model, state, forecast_index, bench) {
       vregfor = matrix(bench$X_all[forecast_index, ], nrow = 1L)
     )
   )
-  sigma_t <- as.numeric(sigma(forecast))[1L]
+  sigma_t <- as.numeric(rugarch::sigma(forecast))[1L]
   if (!is.finite(sigma_t) || sigma_t <= 0) {
     warning("GARCH forecast returned an invalid conditional standard deviation.")
   }
@@ -84,15 +82,16 @@ forecast_garch_one_step <- function(model, state, forecast_index, bench) {
   # rugarch's "std" innovations are Student-t innovations standardized to
   # unit variance, so sigma_t remains the conditional standard deviation.
   t_scale <- sigma_t * sqrt((nu_t - 2) / nu_t)
-  return_draws <- stats::rt(garch_predictive_draws, df = nu_t) * t_scale
+  predictive_draws <- getOption("benchmark.garch_predictive_draws", 5000L)
+  return_draws <- stats::rt(predictive_draws, df = nu_t) * t_scale
 
   list(
-    variance_draws = rep(sigma_t^2, garch_predictive_draws),
+    variance_draws = rep(sigma_t^2, predictive_draws),
     return_draws = return_draws,
     state_prior = list(history_indices = history_indices),
     log_density_draws = function(y) {
       rep(stats::dt(y / t_scale, df = nu_t, log = TRUE) - log(t_scale),
-          garch_predictive_draws)
+          predictive_draws)
     }
   )
 }
@@ -102,7 +101,12 @@ update_garch_state <- function(model, state, forecast, observed_y,
   list(history_indices = c(state$history_indices, observation_index))
 }
 
-run_garch_benchmark <- function(model_name, solver = "hybrid") {
+run_garch_benchmark <- function(model_name,
+                                bench = load_benchmark_data(),
+                                refit_every = getOption("benchmark.refit_every", 13L),
+                                save_fits = getOption("benchmark.save_fits", FALSE),
+                                seed = 666L,
+                                solver = "hybrid") {
   rolling_forecast(
     bench = bench,
     fit_model = fit_garch_model(model_name, solver),
@@ -110,13 +114,17 @@ run_garch_benchmark <- function(model_name, solver = "hybrid") {
     update_state = update_garch_state,
     refit_every = refit_every,
     model_name = model_name,
-    seed = switch(model_name, sGARCH = 2666L, gjrGARCH = 3666L, eGARCH = 4666L)
+    save_fits = save_fits,
+    seed = seed
   )
 }
 
-if (!exists("benchmark_results")) {
-  benchmark_results <- list()
+if (isTRUE(getOption("benchmark.garch_autorun", FALSE))) {
+  bench <- load_benchmark_data()
+  if (!exists("benchmark_results")) benchmark_results <- list()
+  benchmark_results$sGARCH <- run_garch_benchmark("sGARCH", bench = bench)
+  benchmark_results$gjrGARCH <- run_garch_benchmark("gjrGARCH", bench = bench)
+  benchmark_results$eGARCH <- run_garch_benchmark(
+    "eGARCH", bench = bench, solver = "gosolnp"
+  )
 }
-benchmark_results$sGARCH <- run_garch_benchmark("sGARCH")
-benchmark_results$gjrGARCH <- run_garch_benchmark("gjrGARCH")
-benchmark_results$eGARCH <- run_garch_benchmark("eGARCH", solver = "gosolnp")
