@@ -7,10 +7,9 @@
 
 # "all"; one model; several models; or character(0) for evaluation only.
 MODELS_TO_RUN <- "all"
-# Examples:
 # MODELS_TO_RUN <- "sGARCH"
 # MODELS_TO_RUN <- c("sGARCH", "gjrGARCH", "eGARCH")
-# MODELS_TO_RUN <- "linearSV"
+# MODELS_TO_RUN <- "nonlinearSV"
 # MODELS_TO_RUN <- c("linearSV", "nonlinearSV")
 # MODELS_TO_RUN <- "harRV"
 # MODELS_TO_RUN <- "regimeSwitchingSV"
@@ -38,7 +37,7 @@ CPU_VARIABLE <- "GCPU_baseline"
 MCS_BOOTSTRAP <- 5000L
 PPC_REPLICATIONS <- 500L
 
-# ========================== 2. FILE NAMES ====================================
+# ========================== 2. HELPERS =======================================
 
 first_file <- function(x, required = TRUE) {
   hit <- x[file.exists(x)]
@@ -47,466 +46,457 @@ first_file <- function(x, required = TRUE) {
   NULL
 }
 
-FILES <- list(
-  utils = first_file("benchmark_utils.R"),
-  garch = first_file(c("GARCH.R"), FALSE),
-  linear = first_file(c("linear_sv.R"), FALSE),
-  ms = first_file(c("regime_switching_sv.R"), FALSE),
-  har = first_file(c("HAR_RV.R"), FALSE),
-  nn = first_file(c("nonlinear_sv.R"), FALSE),
-
-  evaluation = first_file(c("evaluate_results.R"), FALSE)
-)
-
-# ========================== 3. GLOBAL OPTIONS ================================
-
-# These stop model files from automatically running when sourced.
-options(
-  benchmark.garch_autorun = FALSE,
-  benchmark.linear_autorun = FALSE,
-  benchmark.linear_sv_autorun = FALSE,
-  benchmark.ms_autorun = FALSE,
-  benchmark.ms_sv_autorun = FALSE,
-  benchmark.nn_autorun = FALSE,
-  benchmark.har_autorun = FALSE,
-  benchmark.evaluate_autorun = FALSE,
-
-  benchmark.refit_every = REFIT_EVERY,
-  benchmark.save_fits = SAVE_ALL_ROLLING_FITS,
-
-  benchmark.stan_chains = STAN_CHAINS,
-  benchmark.stan_warmup = STAN_WARMUP,
-  benchmark.stan_sampling = STAN_SAMPLING,
-  benchmark.stan_adapt_delta = STAN_ADAPT_DELTA,
-  benchmark.stan_max_treedepth = STAN_MAX_TREEDEPTH,
-
-  benchmark.linear_chains = STAN_CHAINS,
-  benchmark.linear_warmup = STAN_WARMUP,
-  benchmark.linear_sampling = STAN_SAMPLING,
-  benchmark.linear_adapt_delta = STAN_ADAPT_DELTA,
-  benchmark.linear_max_treedepth = STAN_MAX_TREEDEPTH,
-
-  benchmark.ms_chains = STAN_CHAINS,
-  benchmark.ms_warmup = STAN_WARMUP,
-  benchmark.ms_sampling = STAN_SAMPLING,
-  benchmark.ms_adapt_delta = STAN_ADAPT_DELTA,
-  benchmark.ms_max_treedepth = STAN_MAX_TREEDEPTH,
-
-  benchmark.nn_chains = STAN_CHAINS,
-  benchmark.nn_warmup = STAN_WARMUP,
-  benchmark.nn_sampling = STAN_SAMPLING,
-  benchmark.nn_adapt_delta = STAN_ADAPT_DELTA,
-  benchmark.nn_max_treedepth = STAN_MAX_TREEDEPTH,
-  benchmark.nn_compute_loo = NN_COMPUTE_LOO,
-  benchmark.architecture_metric = NN_ARCHITECTURE_METRIC,
-  benchmark.nn_seed = GLOBAL_SEED
-)
-
-if (!requireNamespace("rstan", quietly = TRUE)) {
-  stop("Install rstan first.", call. = FALSE)
-}
-if (!requireNamespace("posterior", quietly = TRUE)) {
-  stop("Install posterior first.", call. = FALSE)
-}
-if (!requireNamespace("bayesplot", quietly = TRUE)) {
-  stop("Install bayesplot first.", call. = FALSE)
-}
-
-rstan::rstan_options(auto_write = TRUE)
-cores <- parallel::detectCores(logical = TRUE)
-if (is.na(cores)) cores <- 1L
-options(mc.cores = min(STAN_CHAINS, cores))
-set.seed(GLOBAL_SEED)
-
-# ========================== 4. LOAD FUNCTIONS AND DATA =======================
-
-source(FILES$utils)
-for (f in c(FILES$garch, FILES$linear, FILES$ms, FILES$nn, FILES$har)) {
-  if (!is.null(f)) {
-    message("Sourcing ", f)
-    source(f)
-  }
-}
-
-bench <- load_benchmark_data()
-
-if (!all(c("all", "y_all", "X_all", "split_rows") %in% names(bench))) {
-  stop("bench is missing all/y_all/X_all/split_rows.", call. = FALSE)
-}
-
-# ========================== 5. OUTPUT DIRECTORIES ============================
-
-DIR <- list(
-  models = "results/models",
-  evaluation = "results/evaluation",
-  tables = "results/tables",
-  diagnostics = "results/diagnostics"
-)
-invisible(lapply(DIR, dir.create, recursive = TRUE, showWarnings = FALSE))
-
-# ========================== 6. FLEXIBLE FUNCTION CALLING =====================
-
-first_fun <- function(candidates, required = TRUE) {
-  ok <- candidates[vapply(candidates, exists, logical(1),
-                          mode = "function", inherits = TRUE)]
-  if (length(ok)) return(ok[1L])
-  if (required) {
-    stop("Runner not found: ", paste(candidates, collapse = " / "),
-         call. = FALSE)
-  }
-  NULL
-}
-
-# Pass only arguments that the actual runner accepts.
-call_flexible <- function(candidates, args, aliases = list(),
-                          required = TRUE) {
-  nm <- first_fun(candidates, required)
-  if (is.null(nm)) return(NULL)
-
-  fn <- get(nm, mode = "function", inherits = TRUE)
-  fml <- names(formals(fn))
-  dots <- "..." %in% fml
-  use <- list()
-
-  for (key in names(args)) {
-    possible <- unique(c(key, aliases[[key]]))
-    target <- possible[possible %in% fml]
-    if (length(target)) {
-      use[[target[1L]]] <- args[[key]]
-    } else if (dots) {
-      use[[key]] <- args[[key]]
-    }
-  }
-
-  message("Calling ", nm, "(", paste(names(use), collapse = ", "), ")")
-  do.call(fn, use)
-}
-
-extract_result <- function(x, key, aliases = character()) {
-  if (is.list(x) && !is.null(x$forecast_table)) return(x)
-  for (nm in unique(c(key, aliases))) {
-    if (is.list(x[[nm]]) && !is.null(x[[nm]]$forecast_table)) return(x[[nm]])
-    if (is.list(x$benchmark_results[[nm]]) &&
-        !is.null(x$benchmark_results[[nm]]$forecast_table)) {
-      return(x$benchmark_results[[nm]])
-    }
-  }
-  stop("No forecast_table found for ", key, ".", call. = FALSE)
-}
-
 check_result <- function(x, key) {
   if (!is.list(x) || !is.data.frame(x$forecast_table) ||
       nrow(x$forecast_table) == 0L) {
     stop(key, " did not return a non-empty forecast_table.", call. = FALSE)
   }
-  needed <- c("forecast_date", "split", "actual_return", "variance",
-              "VaR_01", "ES_01", "VaR_05", "ES_05", "log_score")
+  needed <- c(
+    "forecast_date", "split", "actual_return", "variance", "VaR_01",
+    "ES_01", "VaR_05", "ES_05", "log_score"
+  )
   missing <- setdiff(needed, names(x$forecast_table))
   if (length(missing)) {
-    stop(key, " forecast_table missing: ",
-         paste(missing, collapse = ", "), call. = FALSE)
+    stop(key, " forecast_table missing: ", paste(missing, collapse = ", "),
+         call. = FALSE)
   }
   invisible(TRUE)
 }
 
-COMMON_ALIASES <- list(
-  bench = c("data", "benchmark_data"),
-  model = c("garch_model", "variance_model", "model_name", "spec_model"),
-  refit_every = c("refit", "refit_frequency"),
-  save_fits = c("save_rolling_fits"),
-  seed = c("random_seed")
-)
+model_path <- function(key, model_dir) {
+  file.path(model_dir, paste0(key, ".rds"))
+}
 
-# ========================== 7. MODEL ADAPTERS ================================
+persist_result_index <- function(results, model_dir) {
+  saveRDS(
+    results,
+    file.path(model_dir, "benchmark_results_all_available.rds"),
+    compress = TRUE
+  )
+  results
+}
 
-run_garch_one <- function(key) {
-  single <- first_fun(c("run_garch_benchmark", "run_garch_model",
-                        "run_single_garch", "run_garch"), FALSE)
+persist_model_result <- function(key, result, model_dir, results) {
+  check_result(result, key)
+  saveRDS(result, model_path(key, model_dir), compress = TRUE)
+  results[[key]] <- result
+  persist_result_index(results, model_dir)
+}
 
-  if (!is.null(single)) {
-    out <- call_flexible(
-      single,
-      list(bench = bench, model = key, refit_every = REFIT_EVERY,
-           save_fits = SAVE_ALL_ROLLING_FITS, seed = GLOBAL_SEED),
-      COMMON_ALIASES
+load_saved_results <- function(keys, model_dir) {
+  results <- list()
+  for (key in keys) {
+    path <- model_path(key, model_dir)
+    if (!file.exists(path)) next
+
+    result <- tryCatch(readRDS(path), error = function(e) NULL)
+    if (is.null(result)) next
+
+    is_valid <- tryCatch({
+      check_result(result, key)
+      TRUE
+    }, error = function(e) FALSE)
+    if (is_valid) results[[key]] <- result
+  }
+  results
+}
+
+run_model_sequence <- function(runners, model_dir, initial_results = list()) {
+  results <- initial_results
+  errors <- list()
+
+  for (key in names(runners)) {
+    message("\n", strrep("=", 70), "\nRUNNING: ", key,
+            "\n", strrep("=", 70))
+    started <- Sys.time()
+
+    outcome <- tryCatch(
+      {
+        result <- runners[[key]]()
+        if (is.null(result)) {
+          stop(key, " runner returned NULL.", call. = FALSE)
+        }
+        list(ok = TRUE, results = persist_model_result(
+          key = key,
+          result = result,
+          model_dir = model_dir,
+          results = results
+        ))
+      },
+      error = function(e) list(ok = FALSE, error = conditionMessage(e))
     )
-  } else {
-    out <- call_flexible(
-      c("run_garch_benchmarks", "run_all_garch_models", "run_all_garch"),
-      list(bench = bench, refit_every = REFIT_EVERY,
-           save_fits = SAVE_ALL_ROLLING_FITS, seed = GLOBAL_SEED),
-      COMMON_ALIASES
-    )
+
+    if (isTRUE(outcome$ok)) {
+      results <- outcome$results
+      minutes <- as.numeric(difftime(Sys.time(), started, units = "mins"))
+      message("Saved ", key, " to ", model_path(key, model_dir), " (",
+              round(minutes, 2), " min).")
+    } else {
+      errors[[key]] <- outcome$error
+      warning(key, " failed: ", outcome$error, call. = FALSE)
+      tryCatch(
+        persist_result_index(results, model_dir),
+        error = function(e) warning(
+          "Could not update the result index after ", key, " failed: ",
+          conditionMessage(e), call. = FALSE
+        )
+      )
+    }
   }
 
-  aliases <- switch(
-    key,
-    sGARCH = c("GARCH", "garch"),
-    gjrGARCH = c("GJR-GARCH", "gjr"),
-    eGARCH = c("EGARCH", "egarch"),
-    character()
-  )
-  extract_result(out, key, aliases)
+  list(benchmark_results = results, errors = errors)
 }
 
-run_linear <- function() {
-  out <- call_flexible(
-    c("run_linear_sv", "run_linear_sv_benchmark", "run_linearSV"),
-    list(bench = bench, refit_every = REFIT_EVERY,
-         save_fits = SAVE_ALL_ROLLING_FITS, seed = GLOBAL_SEED),
-    COMMON_ALIASES
-  )
-  extract_result(out, "linearSV", c("linear_sv", "LinearSV"))
-}
-
-run_ms <- function() {
-  out <- call_flexible(
-    c("run_regime_switching_sv", "run_regime_switching_sv_benchmark",
-      "run_ms_sv", "run_ms_sv_benchmark", "run_MSSV"),
-    list(bench = bench, refit_every = REFIT_EVERY,
-         save_fits = SAVE_ALL_ROLLING_FITS, seed = GLOBAL_SEED),
-    COMMON_ALIASES
-  )
-  extract_result(out, "regimeSwitchingSV",
-                 c("msSV", "MSSV", "regime_switching_sv"))
-}
-
-run_nn <- function() {
-  if (!exists("run_nonlinear_sv", mode = "function")) {
-    stop("run_nonlinear_sv() not found.", call. = FALSE)
-  }
-
-  args <- list(bench = bench,
-               architecture_metric = NN_ARCHITECTURE_METRIC)
-
-  if (exists("default_nn_candidates", mode = "function")) {
-    args$candidates <- default_nn_candidates()
-  }
-
-  if (exists("nn_sv_default_config", mode = "function")) {
-    cfg <- nn_sv_default_config()
-    cfg$refit_every <- REFIT_EVERY
-    cfg$save_fits <- SAVE_ALL_ROLLING_FITS
-    cfg$seed <- GLOBAL_SEED
-    cfg$chains <- STAN_CHAINS
-    cfg$warmup <- STAN_WARMUP
-    if ("sampling" %in% names(cfg)) cfg$sampling <- STAN_SAMPLING
-    if ("iter" %in% names(cfg)) cfg$iter <- STAN_WARMUP + STAN_SAMPLING
-    cfg$adapt_delta <- STAN_ADAPT_DELTA
-    cfg$max_treedepth <- STAN_MAX_TREEDEPTH
-    cfg$compute_loo <- NN_COMPUTE_LOO
-    args$config <- cfg
-  }
-
-  extract_result(do.call(run_nonlinear_sv, args), "nonlinearSV",
-                 c("nnSV", "NNSV"))
-}
-
-run_har <- function() {
-  out <- call_flexible(
-    c("run_har_rv", "run_har_rv_benchmark", "run_HAR_RV"),
-    list(bench = bench, refit_every = REFIT_EVERY,
-         save_fits = SAVE_ALL_ROLLING_FITS, seed = GLOBAL_SEED),
-    COMMON_ALIASES,
-    required = FALSE
-  )
-  if (is.null(out)) return(NULL)
-  extract_result(out, "harRV", c("HAR", "HAR_RV", "har_rv"))
-}
-
-REGISTRY <- list(
-  sGARCH = list(file = FILES$garch, run = function() run_garch_one("sGARCH")),
-  gjrGARCH = list(file = FILES$garch,
-                  run = function() run_garch_one("gjrGARCH")),
-  eGARCH = list(file = FILES$garch, run = function() run_garch_one("eGARCH")),
-  linearSV = list(file = FILES$linear, run = run_linear),
-  regimeSwitchingSV = list(file = FILES$ms, run = run_ms),
-  nonlinearSV = list(file = FILES$nn, run = run_nn),
-  harRV = list(file = FILES$har, run = run_har, optional = TRUE)
-)
-
-ALL_KEYS <- names(REGISTRY)
-
-resolve_selection <- function(x) {
+resolve_selection <- function(x, all_keys) {
   if (!length(x)) return(character())
-  if ("all" %in% x) {
-    return(ALL_KEYS[vapply(REGISTRY, function(z) !is.null(z$file), logical(1))])
-  }
-  bad <- setdiff(x, ALL_KEYS)
+  if ("all" %in% x) return(all_keys)
+  bad <- setdiff(x, all_keys)
   if (length(bad)) stop("Unknown model(s): ", paste(bad, collapse = ", "))
   unique(x)
 }
-SELECTED <- resolve_selection(MODELS_TO_RUN)
 
-# ========================== 8. LOAD SAVED RESULTS ============================
-
-model_path <- function(key) file.path(DIR$models, paste0(key, ".rds"))
-
-load_saved <- function() {
-  ans <- list()
-  for (key in ALL_KEYS) {
-    p <- model_path(key)
-    if (file.exists(p)) {
-      x <- tryCatch(readRDS(p), error = function(e) NULL)
-      if (!is.null(x)) {
-        ok <- tryCatch({check_result(x, key); TRUE}, error = function(e) FALSE)
-        if (ok) ans[[key]] <- x
-      }
-    }
+save_final_stan_plot <- function(results, key, diagnostics_dir, pars, pairs) {
+  result <- results[[key]]
+  if (is.null(result$fit) || !inherits(result$fit, "stanfit")) {
+    return(invisible(FALSE))
   }
-  ans
-}
-
-benchmark_results <- if (LOAD_SAVED_RESULTS) load_saved() else list()
-
-# ========================== 9. RUN SELECTED MODELS ===========================
-
-errors <- list()
-
-for (key in SELECTED) {
-  p <- model_path(key)
-
-  if (is.null(REGISTRY[[key]]$file)) {
-    message("Skipping ", key, ": source file not found.")
-    next
-  }
-
-  if (!FORCE_RERUN && file.exists(p)) {
-    message("Skipping ", key, ": saved result exists. ",
-            "Set FORCE_RERUN <- TRUE to rerun.")
-    benchmark_results[[key]] <- readRDS(p)
-    next
-  }
-
-  message("\n", strrep("=", 70), "\nRUNNING: ", key, "\n", strrep("=", 70))
-  started <- Sys.time()
-
-  x <- tryCatch(
-    REGISTRY[[key]]$run(),
-    error = function(e) {
-      errors[[key]] <<- conditionMessage(e)
-      warning(key, " failed: ", conditionMessage(e), call. = FALSE)
-      NULL
-    }
-  )
-
-  if (!is.null(x)) {
-    check_result(x, key)
-    benchmark_results[[key]] <- x
-    saveRDS(x, p, compress = TRUE)
-    mins <- as.numeric(difftime(Sys.time(), started, units = "mins"))
-    message("Saved ", key, " to ", p, " (", round(mins, 2), " min).")
-  }
-}
-
-# Reload all valid saved results after the run.
-if (LOAD_SAVED_RESULTS) {
-  disk <- load_saved()
-  benchmark_results[names(disk)] <- disk
-}
-
-saveRDS(benchmark_results,
-        file.path(DIR$models, "benchmark_results_all_available.rds"),
-        compress = TRUE)
-
-# ========================== 10. FINAL STAN PLOTS =============================
-
-save_plot <- function(key, pars, pairs) {
-  x <- benchmark_results[[key]]
-  if (is.null(x$fit) || !inherits(x$fit, "stanfit")) return(invisible(FALSE))
   if (!exists("save_stan_diagnostic_plots", mode = "function")) {
     return(invisible(FALSE))
   }
   save_stan_diagnostic_plots(
-    fit = x$fit,
-    file = file.path(DIR$diagnostics, paste0(key, "_final_refit.pdf")),
+    fit = result$fit,
+    file = file.path(diagnostics_dir, paste0(key, "_final_refit.pdf")),
     pars = pars,
     pairs_pars = pairs
   )
   invisible(TRUE)
 }
 
-if (SAVE_FINAL_STAN_PLOTS) {
-  save_plot("linearSV",
-            c("mu", "phi", "phi_raw", "sigma_eta", "nu_minus2"),
-            c("phi", "phi_raw", "sigma_eta", "nu_minus2"))
-  save_plot("regimeSwitchingSV",
-            c("mu", "phi", "sigma_eta", "p11", "p22", "nu_minus2"),
-            c("phi", "sigma_eta", "p11", "p22"))
-  save_plot("nonlinearSV",
-            c("mu", "phi", "phi_raw", "sigma_eta", "tau_w", "s"),
-            c("phi", "phi_raw", "sigma_eta", "tau_w", "s"))
+# ========================== 3. MODEL ADAPTERS ================================
+
+run_garch_one <- function(key, bench) {
+  solver <- if (identical(key, "eGARCH")) "gosolnp" else "hybrid"
+  run_garch_benchmark(
+    model_name = key,
+    bench = bench,
+    refit_every = REFIT_EVERY,
+    save_fits = SAVE_ALL_ROLLING_FITS,
+    seed = GLOBAL_SEED,
+    solver = solver
+  )
 }
 
-# ========================== 11. EVALUATE ALL AVAILABLE RESULTS ===============
+run_linear_one <- function(bench) {
+  run_linear_sv(
+    bench = bench,
+    refit_every = REFIT_EVERY,
+    save_fits = SAVE_ALL_ROLLING_FITS,
+    seed = GLOBAL_SEED,
+    chains = STAN_CHAINS,
+    iter = STAN_WARMUP + STAN_SAMPLING,
+    warmup = STAN_WARMUP,
+    adapt_delta = STAN_ADAPT_DELTA,
+    max_treedepth = STAN_MAX_TREEDEPTH
+  )
+}
 
-write_df <- function(x, name) {
-  if (is.data.frame(x)) {
-    utils::write.csv(x, file.path(DIR$tables, name), row.names = FALSE)
+run_regime_switching_one <- function(bench) {
+  run_regime_switching_sv(
+    bench = bench,
+    refit_every = REFIT_EVERY,
+    save_fits = SAVE_ALL_ROLLING_FITS,
+    seed = GLOBAL_SEED,
+    chains = STAN_CHAINS,
+    iter = STAN_WARMUP + STAN_SAMPLING,
+    warmup = STAN_WARMUP,
+    adapt_delta = STAN_ADAPT_DELTA,
+    max_treedepth = STAN_MAX_TREEDEPTH
+  )
+}
+
+run_nonlinear_one <- function(bench) {
+  if (!exists("run_nonlinear_sv", mode = "function")) {
+    stop("run_nonlinear_sv() not found.", call. = FALSE)
   }
+
+  config <- nn_sv_default_config()
+  config$refit_every <- REFIT_EVERY
+  config$save_fits <- SAVE_ALL_ROLLING_FITS
+  config$seed <- GLOBAL_SEED
+  config$chains <- STAN_CHAINS
+  config$warmup <- STAN_WARMUP
+  config$iter <- STAN_WARMUP + STAN_SAMPLING
+  config$adapt_delta <- STAN_ADAPT_DELTA
+  config$max_treedepth <- STAN_MAX_TREEDEPTH
+  config$compute_loo <- NN_COMPUTE_LOO
+
+  run_nonlinear_sv(
+    bench = bench,
+    candidates = default_nn_candidates(),
+    architecture_metric = NN_ARCHITECTURE_METRIC,
+    config = config
+  )
 }
 
-evaluation_results <- NULL
+run_har_one <- function(bench) {
+  run_har_rv(
+    bench = bench,
+    refit_every = REFIT_EVERY,
+    save_fits = SAVE_ALL_ROLLING_FITS,
+    seed = GLOBAL_SEED
+  )
+}
 
-if (RUN_EVALUATION && length(benchmark_results)) {
-  if (is.null(FILES$evaluation)) {
-    warning("Evaluation file not found.", call. = FALSE)
-  } else {
-    source(FILES$evaluation)
+# ========================== 4. TOP-LEVEL SUITE ===============================
 
-    evaluation_results <- evaluate_all_models(
-      bench = bench,
-      benchmark_results = benchmark_results,
-      cpu_variable = CPU_VARIABLE,
-      mcs_bootstrap = MCS_BOOTSTRAP,
-      ppc_replications = PPC_REPLICATIONS
+run_benchmark_suite <- function() {
+  files <- list(
+    utils = first_file("benchmark_utils.R"),
+    garch = first_file("GARCH.R", FALSE),
+    linear = first_file("linear_sv.R", FALSE),
+    ms = first_file("regime_switching_sv.R", FALSE),
+    nn = first_file("nonlinear_sv.R", FALSE),
+    har = first_file("HAR_RV.R", FALSE),
+    evaluation = first_file("evaluate_results.R", FALSE)
+  )
+  all_keys <- c(
+    "sGARCH", "gjrGARCH", "eGARCH", "linearSV", "regimeSwitchingSV",
+    "nonlinearSV", "harRV"
+  )
+  selected <- resolve_selection(MODELS_TO_RUN, all_keys)
+
+  options(
+    benchmark.garch_autorun = FALSE,
+    benchmark.linear_autorun = FALSE,
+    benchmark.linear_sv_autorun = FALSE,
+    benchmark.ms_autorun = FALSE,
+    benchmark.ms_sv_autorun = FALSE,
+    benchmark.nn_autorun = FALSE,
+    benchmark.har_autorun = FALSE,
+    benchmark.evaluate_autorun = FALSE,
+    benchmark.refit_every = REFIT_EVERY,
+    benchmark.save_fits = SAVE_ALL_ROLLING_FITS,
+    benchmark.stan_chains = STAN_CHAINS,
+    benchmark.stan_warmup = STAN_WARMUP,
+    benchmark.stan_iter = STAN_WARMUP + STAN_SAMPLING,
+    benchmark.stan_adapt_delta = STAN_ADAPT_DELTA,
+    benchmark.stan_max_treedepth = STAN_MAX_TREEDEPTH,
+    benchmark.nn_chains = STAN_CHAINS,
+    benchmark.nn_warmup = STAN_WARMUP,
+    benchmark.nn_sampling = STAN_SAMPLING,
+    benchmark.nn_iter = STAN_WARMUP + STAN_SAMPLING,
+    benchmark.nn_adapt_delta = STAN_ADAPT_DELTA,
+    benchmark.nn_max_treedepth = STAN_MAX_TREEDEPTH,
+    benchmark.nn_compute_loo = NN_COMPUTE_LOO,
+    benchmark.architecture_metric = NN_ARCHITECTURE_METRIC,
+    benchmark.nn_seed = GLOBAL_SEED
+  )
+  set.seed(GLOBAL_SEED)
+
+  source(files$utils)
+  modules <- c(
+    garch = files$garch,
+    linearSV = files$linear,
+    regimeSwitchingSV = files$ms,
+    nonlinearSV = files$nn,
+    harRV = files$har
+  )
+  module_errors <- list()
+  for (key in names(modules)) {
+    file <- modules[[key]]
+    if (is.null(file)) next
+    message("Sourcing ", file)
+    tryCatch(
+      source(file),
+      error = function(e) {
+        module_errors[[key]] <<- conditionMessage(e)
+        warning("Could not source ", file, ": ", conditionMessage(e),
+                call. = FALSE)
+      }
     )
+  }
 
-    saveRDS(evaluation_results,
-            file.path(DIR$evaluation,
-                      "evaluation_results_all_available.rds"),
-            compress = TRUE)
+  bench <- load_benchmark_data()
+  if (!all(c("all", "y_all", "X_all", "split_rows") %in% names(bench))) {
+    stop("bench is missing all/y_all/X_all/split_rows.", call. = FALSE)
+  }
 
-    write_df(evaluation_results$summary, "overall_summary.csv")
-    write_df(evaluation_results$architecture_selection,
-             "architecture_selection.csv")
-    write_df(evaluation_results$convergence, "stan_convergence.csv")
-    write_df(evaluation_results$density_scores, "density_scores.csv")
-    write_df(evaluation_results$tail_backtests, "tail_backtests.csv")
-    write_df(evaluation_results$portfolio, "portfolio_results.csv")
-    write_df(evaluation_results$posterior_predictive_checks,
-             "posterior_predictive_checks.csv")
+  directories <- list(
+    models = "results/models",
+    evaluation = "results/evaluation",
+    tables = "results/tables",
+    diagnostics = "results/diagnostics"
+  )
+  invisible(lapply(directories, dir.create, recursive = TRUE, showWarnings = FALSE))
 
-    if (is.list(evaluation_results$dm_tests)) {
-      write_df(evaluation_results$dm_tests$QLIKE, "dm_qlike.csv")
-      write_df(evaluation_results$dm_tests$negative_LPS,
-               "dm_negative_lps.csv")
-      write_df(evaluation_results$dm_tests$FZ0_5pct, "dm_fz05.csv")
+  results <- if (isTRUE(LOAD_SAVED_RESULTS)) {
+    load_saved_results(all_keys, directories$models)
+  } else {
+    list()
+  }
+
+  registry <- list(
+    sGARCH = list(file = files$garch, run = function() run_garch_one("sGARCH", bench)),
+    gjrGARCH = list(file = files$garch, run = function() run_garch_one("gjrGARCH", bench)),
+    eGARCH = list(file = files$garch, run = function() run_garch_one("eGARCH", bench)),
+    linearSV = list(file = files$linear, run = function() run_linear_one(bench)),
+    regimeSwitchingSV = list(file = files$ms, run = function() run_regime_switching_one(bench)),
+    nonlinearSV = list(file = files$nn, run = function() run_nonlinear_one(bench)),
+    harRV = list(file = files$har, run = function() run_har_one(bench))
+  )
+
+  runnable <- list()
+  errors <- module_errors
+  for (key in selected) {
+    entry <- registry[[key]]
+    if (is.null(entry$file)) {
+      message("Skipping ", key, ": source file not found.")
+      next
+    }
+    if (!isTRUE(FORCE_RERUN) && key %in% names(results)) {
+      message("Skipping ", key, ": valid saved result exists. ",
+              "Set FORCE_RERUN <- TRUE to rerun.")
+      next
+    }
+    if (key %in% names(module_errors)) {
+      errors[[key]] <- module_errors[[key]]
+      tryCatch(
+        persist_result_index(results, directories$models),
+        error = function(e) warning(
+          "Could not update the result index after ", key, " failed to source: ",
+          conditionMessage(e), call. = FALSE
+        )
+      )
+      next
+    }
+    runnable[[key]] <- entry$run
+  }
+
+  sequence_result <- run_model_sequence(
+    runners = runnable,
+    model_dir = directories$models,
+    initial_results = results
+  )
+  results <- sequence_result$benchmark_results
+  errors[names(sequence_result$errors)] <- sequence_result$errors
+
+  if (isTRUE(LOAD_SAVED_RESULTS)) {
+    disk_results <- load_saved_results(all_keys, directories$models)
+    results[names(disk_results)] <- disk_results
+  }
+  persist_result_index(results, directories$models)
+  saveRDS(errors, file.path(directories$models, "benchmark_run_errors.rds"),
+          compress = TRUE)
+
+  if (isTRUE(SAVE_FINAL_STAN_PLOTS)) {
+    plot_requests <- list(
+      linearSV = list(
+        pars = c("mu", "phi", "phi_raw", "sigma_eta", "nu_minus2"),
+        pairs = c("phi", "phi_raw", "sigma_eta", "nu_minus2")
+      ),
+      regimeSwitchingSV = list(
+        pars = c("mu", "phi", "sigma_eta", "p11", "p22", "nu_minus2"),
+        pairs = c("phi", "sigma_eta", "p11", "p22")
+      ),
+      nonlinearSV = list(
+        pars = c("mu", "phi", "phi_raw", "sigma_eta", "tau_w", "s"),
+        pairs = c("phi", "phi_raw", "sigma_eta", "tau_w", "s")
+      )
+    )
+    for (key in names(plot_requests)) {
+      tryCatch(
+        save_final_stan_plot(
+          results = results,
+          key = key,
+          diagnostics_dir = directories$diagnostics,
+          pars = plot_requests[[key]]$pars,
+          pairs = plot_requests[[key]]$pairs
+        ),
+        error = function(e) warning(
+          "Could not save final Stan plot for ", key, ": ",
+          conditionMessage(e), call. = FALSE
+        )
+      )
     }
   }
-}
 
-# ========================== 12. CONSOLE SUMMARY ==============================
-
-cat("\n", strrep("=", 70), "\nRUN COMPLETE\n", strrep("=", 70), "\n", sep = "")
-cat("Available results: ",
-    if (length(benchmark_results)) paste(names(benchmark_results),
-                                         collapse = ", ") else "<none>",
-    "\n", sep = "")
-
-if (length(errors)) {
-  cat("Failures:\n")
-  for (key in names(errors)) {
-    cat("  - ", key, ": ", errors[[key]], "\n", sep = "")
+  evaluation_results <- NULL
+  if (isTRUE(RUN_EVALUATION) && length(results)) {
+    if (is.null(files$evaluation)) {
+      warning("Evaluation file not found.", call. = FALSE)
+    } else {
+      evaluation_results <- tryCatch(
+        {
+          source(files$evaluation)
+          output <- evaluate_all_models(
+            bench = bench,
+            benchmark_results = results,
+            cpu_variable = CPU_VARIABLE,
+            mcs_bootstrap = MCS_BOOTSTRAP,
+            ppc_replications = PPC_REPLICATIONS
+          )
+          saveRDS(
+            output,
+            file.path(directories$evaluation,
+                      "evaluation_results_all_available.rds"),
+            compress = TRUE
+          )
+          for (item in c(
+            "summary", "architecture_selection", "convergence", "density_scores",
+            "tail_backtests", "portfolio", "posterior_predictive_checks"
+          )) {
+            if (is.data.frame(output[[item]])) {
+              utils::write.csv(
+                output[[item]],
+                file.path(directories$tables, paste0(item, ".csv")),
+                row.names = FALSE
+              )
+            }
+          }
+          if (is.list(output$dm_tests)) {
+            for (item in names(output$dm_tests)) {
+              if (is.data.frame(output$dm_tests[[item]])) {
+                utils::write.csv(
+                  output$dm_tests[[item]],
+                  file.path(directories$tables, paste0("dm_", item, ".csv")),
+                  row.names = FALSE
+                )
+              }
+            }
+          }
+          output
+        },
+        error = function(e) {
+          warning("Evaluation failed: ", conditionMessage(e), call. = FALSE)
+          NULL
+        }
+      )
+    }
   }
+
+  cat("\n", strrep("=", 70), "\nRUN COMPLETE\n", strrep("=", 70), "\n",
+      sep = "")
+  cat("Available results: ",
+      if (length(results)) paste(names(results), collapse = ", ") else "<none>",
+      "\n", sep = "")
+  if (length(errors)) {
+    cat("Failures:\n")
+    for (key in names(errors)) cat("  - ", key, ": ", errors[[key]], "\n", sep = "")
+  }
+  cat("\nModel RDS: ", directories$models,
+      "\nEvaluation RDS: ", directories$evaluation,
+      "\nCSV tables: ", directories$tables,
+      "\nStan plots: ", directories$diagnostics, "\n", sep = "")
+
+  list(
+    benchmark_results = results,
+    errors = errors,
+    evaluation_results = evaluation_results
+  )
 }
 
-if (!is.null(evaluation_results)) {
-  cat("\nOverall evaluation:\n")
-  print(evaluation_results$summary)
+if (isTRUE(getOption("benchmark.runner_autorun", TRUE))) {
+  suite_result <- run_benchmark_suite()
+  benchmark_results <- suite_result$benchmark_results
+  evaluation_results <- suite_result$evaluation_results
 }
-
-cat("\nModel RDS: ", DIR$models,
-    "\nEvaluation RDS: ", DIR$evaluation,
-    "\nCSV tables: ", DIR$tables,
-    "\nStan plots: ", DIR$diagnostics, "\n", sep = "")
