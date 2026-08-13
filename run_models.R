@@ -8,19 +8,19 @@
 # "all"; one model; several models; or character(0) for evaluation only.
 MODELS_TO_RUN <- "all"
 # MODELS_TO_RUN <- "sGARCH"
-# MODELS_TO_RUN <- c("sGARCH", "gjrGARCH", "eGARCH")
+# MODELS_TO_RUN <- c("eGARCH","nonlinearSV","harRV","regimeSwitchingSV")
 # MODELS_TO_RUN <- "nonlinearSV"
 # MODELS_TO_RUN <- c("linearSV", "nonlinearSV")
 # MODELS_TO_RUN <- "harRV"
 # MODELS_TO_RUN <- "regimeSwitchingSV"
 # MODELS_TO_RUN <- character(0)
 
-FORCE_RERUN <- FALSE          # TRUE = overwrite selected saved models
+FORCE_RERUN <- TRUE          # TRUE = overwrite selected saved models
 LOAD_SAVED_RESULTS <- TRUE    # include models completed in earlier sessions
 RUN_EVALUATION <- TRUE
 SAVE_FINAL_STAN_PLOTS <- TRUE
 
-REFIT_EVERY <- 13L
+REFIT_EVERY <- 26L
 SAVE_ALL_ROLLING_FITS <- FALSE
 GLOBAL_SEED <- 6666L
 
@@ -175,14 +175,15 @@ save_final_stan_plot <- function(results, key, diagnostics_dir, pars, pairs) {
 # ========================== 3. MODEL ADAPTERS ================================
 
 run_garch_one <- function(key, bench) {
-  solver <- if (identical(key, "eGARCH")) "gosolnp" else "hybrid"
+  fallback_solver <- if (identical(key, "eGARCH")) "solnp" else NULL
   run_garch_benchmark(
     model_name = key,
     bench = bench,
     refit_every = REFIT_EVERY,
     save_fits = SAVE_ALL_ROLLING_FITS,
     seed = GLOBAL_SEED,
-    solver = solver
+    solver = "hybrid",
+    fallback_solver = fallback_solver
   )
 }
 
