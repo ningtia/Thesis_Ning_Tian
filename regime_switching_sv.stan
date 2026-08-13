@@ -79,8 +79,7 @@ model {
 }
 
 generated quantities {
-  vector[T] log_lik;
-  matrix[T, 2] filtered_prob;
+  vector[2] filtered_prob_last;
   vector[2] pi_stat;
   vector[2] log_alpha;
   vector[2] log_alpha_next;
@@ -98,8 +97,6 @@ generated quantities {
                        sigma_eta[s] / sqrt(1 - square(phi[s]))
                      );
   }
-  filtered_prob[1] = softmax(log_alpha)';
-
   for (t in 2:T) {
     for (s in 1:2) {
       vector[2] candidates;
@@ -116,10 +113,6 @@ generated quantities {
                             );
     }
     log_alpha = log_alpha_next;
-    filtered_prob[t] = softmax(log_alpha)';
   }
-
-  for (t in 1:T) {
-    log_lik[t] = student_t_lpdf(y[t] | nu, 0, exp(0.5 * h[t]));
-  }
+  filtered_prob_last = softmax(log_alpha);
 }
