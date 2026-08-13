@@ -40,12 +40,14 @@ init_ms_sv <- function(stan_data, previous_post = NULL) {
   )
 }
 
-make_regime_switching_sv_fitter <- function(chains,
+make_regime_switching_sv_fitter <- function(compiled_model,
+                                            chains,
                                             iter,
                                             warmup,
                                             seed,
                                             adapt_delta,
                                             max_treedepth) {
+  force(compiled_model)
   force(chains)
   force(iter)
   force(warmup)
@@ -57,8 +59,8 @@ make_regime_switching_sv_fitter <- function(chains,
     stan_data <- ms_sv_stan_data(bench, train_indices)
     previous_post <- if (is.null(previous_model)) NULL else previous_model$posterior
 
-    fit <- rstan::stan(
-      file = "regime_switching_sv.stan",
+    fit <- rstan::sampling(
+      object = compiled_model,
       data = stan_data,
       chains = chains,
       iter = iter,
@@ -73,7 +75,7 @@ make_regime_switching_sv_fitter <- function(chains,
     post <- rstan::extract(fit)
     n_draws <- length(post$p11)
     last_t <- length(train_indices)
-    p_regime_1 <- post$filtered_prob[, last_t, 1]
+    p_regime_1 <- post$filtered_prob_last[, 1]
 
     ms_diagnostic_pars <- c(
       "mu", "phi", "sigma_eta", "beta", "p11", "p22", "nu_minus2", "h"
@@ -163,10 +165,12 @@ run_regime_switching_sv <- function(
   cores <- parallel::detectCores(logical = TRUE)
   if (is.na(cores)) cores <- 1L
   options(mc.cores = min(as.integer(chains), cores))
+  compiled_model <- rstan::stan_model(file = "regime_switching_sv.stan")
 
   result <- rolling_forecast(
     bench = bench,
     fit_model = make_regime_switching_sv_fitter(
+      compiled_model = compiled_model,
       chains = chains,
       iter = iter,
       warmup = warmup,
