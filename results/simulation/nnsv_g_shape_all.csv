@@ -1,4 +1,0 @@
-"scenario","correlation","rmse","sd_true_g","note"
-"zero",NA,0.0222974282084772,0,"true g == 0; rmse alone measures spurious fitted signal"
-"main",0.931779353552613,0.0614743098580778,0.156539656318963,"rmse close to sd_true_g means no explanatory power at all"
-"strong",0.937158916097276,0.14242450076414,0.40370775992311,"rmse close to sd_true_g means no explanatory power at all"
