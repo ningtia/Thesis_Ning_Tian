@@ -1,0 +1,2 @@
+"scenario","T","n_attempted","n_usable","usable_rate","mean_divergences","median_divergences","n_divergence_fail","n_rhat_fail","n_ess_bulk_fail","n_ess_tail_fail","n_ebfmi_fail","n_lp_fail","mean_max_treedepth_hit"
+"zero",520,10,0,0,20.6,11.5,10,0,0,1,0,0,0

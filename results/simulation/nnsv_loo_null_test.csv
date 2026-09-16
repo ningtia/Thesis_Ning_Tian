@@ -1,0 +1,4 @@
+"scenario","elpd_diff_nn_minus_linear","se_diff","ratio","verdict","div_nn","div_linear","g_sd_median"
+"zero",-1.6597545548616,0.818656536331205,-2.02741257316501,"linear preferred",5,0,0.0544235567107586
+"main",1.97863440076664,3.14303965122549,0.629528933876212,"no evidence of nonlinearity",12,0,0.143785944887061
+"strong",19.4317050231571,5.22615484232326,3.71816480939146,"nonlinearity supported",1,3,0.366491576192666

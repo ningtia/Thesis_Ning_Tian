@@ -1,0 +1,7 @@
+"scenario","T","parameter","n_usable","mean_true_value","mean_median","bias","rmse","mean_ci_width","coverage_95","mean_prob_below_delta","frac_upper_ci_below_delta"
+"zero",520,"mu",0,NA,NA,NA,NA,NA,NA,NA,NA
+"zero",520,"phi",0,NA,NA,NA,NA,NA,NA,NA,NA
+"zero",520,"sigma_eta",0,NA,NA,NA,NA,NA,NA,NA,NA
+"zero",520,"nu",0,NA,NA,NA,NA,NA,NA,NA,NA
+"zero",520,"g_sd",0,NA,NA,NA,NA,NA,NA,NA,NA
+"zero",520,"h_bar",0,NA,NA,NA,NA,NA,NA,NA,NA

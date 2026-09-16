@@ -1,0 +1,5 @@
+"scenario","chain","divergences","max_treedepth_hit","e_bfmi"
+"main",1,0,0,0.846398175364262
+"main",2,0,0,0.847136243666982
+"main",3,0,0,0.816770711195806
+"main",4,0,0,0.879713591966894
