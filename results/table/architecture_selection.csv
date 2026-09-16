@@ -1,0 +1,5 @@
+"candidate","K","distribution","validation_score","validation_divergences","validation_clean","selected","metric"
+"K4_Student_t",4,"Student-t",1.31675973714215,6,FALSE,FALSE,"qlike"
+"K4_Gaussian",4,"Gaussian",1.31855308402782,32,FALSE,FALSE,"qlike"
+"K8_Student_t",8,"Student-t",1.30663604245664,1,FALSE,TRUE,"qlike"
+"K8_Gaussian",8,"Gaussian",1.30810534633895,4,FALSE,FALSE,"qlike"

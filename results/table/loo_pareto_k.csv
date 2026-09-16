@@ -1,0 +1,3 @@
+"Model","available","n_high_k","max_k","action"
+"Nonlinear SV",TRUE,1,0.755763302551179,"Refit remaining high-k folds exactly"
+"Linear SV (g_theta = 0)",TRUE,3,0.747201165088143,"Refit remaining high-k folds exactly"
