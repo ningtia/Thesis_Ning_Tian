@@ -4,20 +4,6 @@
 # Scale exposure so realized volatility matches a target,
 # using the model's variance forecast each period.
 
-# 2026-08-26 bug fix: actual_return (and therefore forecast_variance, which
-# is fit to actual_return^2) is on a PERCENT scale -- e.g. 3.09 means a 3.09%
-# weekly move, so sqrt(forecast_variance) ~= 3 means a 3-percentage-point
-# weekly vol forecast. target_vol above was left as a raw decimal fraction
-# (0.15/sqrt(52) ~= 0.0208), so weight = target_vol / sqrt(forecast_variance)
-# was comparing a decimal to a percent-point figure -- off by exactly 100x.
-# The resulting weight was ~0.007 instead of ~0.7, max_leverage (2) never
-# bound, and the "15%-vol-targeting" portfolio actually ran at ~0.17% annual
-# vol: essentially flat, so every model's Sharpe/CER just reflected noise
-# around the sample's slightly negative mean return rather than any actual
-# volatility-timing skill. Multiplying target_vol by 100 puts it on the same
-# percent scale as sqrt(forecast_variance) before the division; the /100
-# on portfolio_return below (converting percent returns to a decimal wealth
-# multiplier) is unchanged and still correct.
 portfolio_metrics <- function(actual_return, forecast_variance,
                               target_annual_vol = 0.15,
                               max_leverage = 2,
@@ -93,21 +79,7 @@ model_economic_summary <- function(model_name, result,
 }
 
 # ---- 3b. Buy-and-hold benchmark row -----------------------------------------
-# 2026-08-27: added at the advisor's request ("add the buy-and-hold row to
-# the economic table"). Full, unlevered exposure every week (weight = 1,
-# no variance forecast involved) on the same test-period actual returns
-# every model is scored on, so Sharpe/CER/drawdown are directly comparable
-# to the seven vol-targeting rows: this answers "does timing the exposure
-# with a variance forecast beat just holding the asset?"
-#
-# The 1%/5% VaR-implied capital columns need *some* VaR series even though
-# buy-and-hold has no variance forecast to supply one; the standard choice
-# for a "naive" VaR benchmark is the unconditional historical quantile,
-# estimated once on the training split (never on validation/test) and held
-# fixed across the whole test period -- a static historical-simulation VaR,
-# not a forecast that adapts week to week. That asymmetry (constant vs.
-# time-varying VaR) is inherent to what "buy-and-hold" means here and should
-# be flagged wherever this row is discussed, not smoothed over.
+
 buy_and_hold_summary <- function(result,
                                  target_annual_vol = 0.15,
                                  risk_aversion = 3,
@@ -150,12 +122,6 @@ buy_and_hold_summary <- function(result,
 }
 
 # ---- 4. Wealth-path plot ----------------------------------------------------
-# 2026-08-27 rewrite at the advisor's request: real calendar dates on the
-# x-axis (was a bare 1..N step index); nonlinear SV drawn thick black so it
-# reads as the model the thesis is about, every other fitted model thin grey
-# so the comparison set doesn't visually compete with it, and buy-and-hold
-# added as a dashed black reference line (distinguishable from both the
-# thick-solid nn-SV line and the thin-solid grey cluster).
 
 plot_wealth_paths <- function(summaries, file) {
   pdf(file, width = 9, height = 6)
@@ -196,16 +162,6 @@ plot_wealth_paths <- function(summaries, file) {
 }
 
 # ---- 5. Rolling realized volatility vs. target ------------------------------
-# 2026-08-27, added at the advisor's request: the figure meant to show
-# whether each vol-targeting strategy actually delivers ~15% annualized vol
-# (the SV models) or runs hotter than promised (the GARCH models). Grouped
-# by model family so that pattern is visible at a glance rather than buried
-# in seven similarly-styled lines: SV models in blue shades, GARCH models in
-# red/orange shades, HAR-RV (neither) in grey, buy-and-hold's own realized
-# vol as a thin dashed grey reference (it is not vol-targeted, so it is not
-# expected to track the line -- included only to show how much a variance
-# forecast is or is not damping exposure relative to doing nothing).
-#
 # window_weeks = 26 (roughly six months) trades off two things: shorter
 # windows are noisier (a realized-vol estimate from a handful of weekly
 # returns has a wide sampling distribution) and start later relative windows
