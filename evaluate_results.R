@@ -313,17 +313,7 @@ stanfit_psis_loo <- function(fit, k_threshold = 0.7) {
   )
   moment_matching_applied <- !inherits(loo_object, "error")
 
-  # 2026-08-27: moment matching needs the COMPILED model, not just the draws --
-  # it calls log_prob()/grad_log_prob() on the stanfit. After a
-  # saveRDS()/readRDS() round trip the DSO pointer is stale and rstan aborts
-  # with "the model object is not created or not valid", which is exactly what
-  # happened when this ran over results/models/*.rds in a fresh session: both
-  # SV models reported available = FALSE and the thesis lost its whole LOO
-  # comparison. Plain PSIS-LOO needs only the log_lik draws, which survive
-  # serialisation intact, so fall back to it rather than returning nothing.
-  # The fallback is recorded (moment_matching_applied) instead of being
-  # silently equivalent: without moment matching, high-k observations are
-  # approximated less well and must be reported as such.
+
   fallback_reason <- NULL
   if (!moment_matching_applied) {
     fallback_reason <- conditionMessage(loo_object)
@@ -415,11 +405,7 @@ bayesian_loo_comparison <- function(benchmark_results, k_threshold = 0.7) {
     )
   }))
 
-  # 2026-08-27: one tidy, writable row per model. Everything the thesis needs
-  # to report a LOO comparison used to live only inside the S4/matrix objects
-  # above, so nothing could be written to results/tables/ and the comparison
-  # had to be recomputed by hand. elpd_diff/se_diff come straight from
-  # loo_compare (best model first, its elpd_diff being 0 by construction).
+ 
   comparison_table <- NULL
   if (is.data.frame(comparison) && nrow(comparison) && "elpd_diff" %in% names(comparison)) {
     weights <- if (inherits(stacking, "numeric") || inherits(stacking, "stacking_weights")) {
@@ -613,9 +599,6 @@ architecture_selection_table <- function(benchmark_results) {
   }
   selection <- benchmark_results$nonlinearSV$architecture_selection
   candidates <- selection$candidates
-  # validation_divergences/validation_clean were added 2026-08-26; older
-  # cached benchmark_results won't have them, so fall back to NA rather than
-  # erroring on a missing column.
   n <- length(candidates)
   divergences <- selection$validation_divergences %||% rep(NA_real_, n)
   clean <- selection$validation_clean %||% rep(NA, n)
@@ -634,13 +617,6 @@ architecture_selection_table <- function(benchmark_results) {
   )
 }
 
-# 2026-08-26 bug fix: same units mismatch as economic_results_pipeline.R's
-# portfolio_metrics() (see its comment) -- actual_return/forecast_variance
-# are on a PERCENT scale, but target_weekly_vol was a decimal fraction, so
-# weights came out ~100x too small and this "15%-vol-targeting" portfolio
-# actually ran at ~0.17% annual vol regardless of the model. The *100 below
-# puts target_weekly_vol on the same percent scale as sqrt(forecast_variance)
-# before the division.
 volatility_targeting <- function(actual_return, forecast_variance,
                                  target_annual_vol = 0.15,
                                  max_leverage = 2) {
@@ -672,18 +648,7 @@ portfolio_table <- function(benchmark_results) {
 # One QLIKE-per-model row, reused by both overall_evaluation_table() (the
 # lightweight "just the summary" entry point) and evaluate_all_models() (the
 # full evaluation) so the two don't drift out of sync with each other.
-#
-# 2026-08-24 bug fix: this used to call benchmark_utils.R's qlike(actual_variance,
-# forecast_variance) with forecast$actual_return (unsquared) as the first
-# argument. That function does NOT square its input -- it expects the caller
-# to already have a variance-scale proxy -- so raw signed returns were passed
-# through pmax(., eps) untouched on up days (hugely overstating the "true"
-# variance) and floored to ~0 on down days (hugely understating it). This
-# silently produced a QLIKE ranking that contradicted dm_QLIKE.csv's pairwise
-# comparisons on all 6 model pairs (3 of them significant). qlike_loss()
-# (defined above, used by loss_matrix()/the DM tests) squares actual_return
-# correctly per Patton (2011); reusing it here instead of the other qlike()
-# guarantees this table and the DM tests can never drift apart again.
+
 qlike_table_for <- function(benchmark_results) {
   rows <- lapply(available_forecast_models(benchmark_results), function(name) {
     forecast <- model_test_forecasts(benchmark_results[[name]], name)
@@ -741,8 +706,6 @@ evaluate_all_models <- function(bench,
 
   list(
     summary = summary,
-    # LOO_comparison is the flat, writable view of LOO (see run_models.R's
-    # table_files); LOO keeps the full loo/stacking objects for interactive use.
     LOO_comparison = loo_comparison$comparison_table,
     LOO_pareto_k = loo_comparison$pareto_k,
     architecture_selection = architecture_selection_table(benchmark_results),
