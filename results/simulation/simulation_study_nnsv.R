@@ -74,8 +74,7 @@ simulate_nnsv <- function(seed          = 20260820,
 # ---------------------------------------------------------------------------
 # Derived quantities that the recovery table should be compared against.
 # g_scale itself is NOT a parameter of the estimated model and cannot be
-# recovered; sd(g) is its estimable counterpart (reported as g_sd by
-# nonlinear_sv_v2.stan).
+# recovered; sd(g) is its estimable counterpart
 # ---------------------------------------------------------------------------
 dgp_facts <- function(d, sigma_eta = 0.25, phi = 0.95, nu = 10,
                       standardise_t = FALSE) {
