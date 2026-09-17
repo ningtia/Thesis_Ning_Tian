@@ -1,114 +1,15 @@
 # recovery_replications.R
-# A single simulated dataset cannot establish parameter recovery: "the truth is
-# inside the 95% interval" is a coin flip you win 95% of the time by luck.
-# This repeats simulate-and-fit over R datasets and reports bias, RMSE and
-# empirical coverage, which is what a referee will ask for.
-#
-# The DGP below mirrors simulation_study_nnsv.R's "recommended design"
-# (x_ar = 0.90, burn_in = 200): a persistent covariate is what makes g_t
-# identifiable from i.i.d. state noise in the first place, and it is the
-# design nnsv_simulation_main.csv -- and therefore Simulation_recovery.R's
-# single-fit diagnostic -- actually uses.
-#
-# Because a persistent x makes mean(g) != 0 in any finite sample, mu's "true"
-# value is not the DGP intercept 1.80 -- it is level-shifted by
-# mean(g)/(1-phi), same correction as nnsv_main_true_parameters.csv. That
-# shift (and true g_sd = sd(g)) is realization-specific, so both are
-# recomputed from each replication's own simulated path rather than fixed
-# once, matching how Simulation_recovery.R reads its true values off the one
-# dataset it fits.
-#
-# h_bar (sample mean of the log-variance path) is tracked alongside mu: with
-# phi_true = 0.95 close to its ceiling, mu individually sits on a ridge with
-# phi and can recover badly even in a fit that is otherwise fine, while
-# h_bar -- the level the application actually cares about -- stays
-# identified. See nonlinear_sv_v3.stan's header comment on h_bar.
-#
-# 2026-08-22, three methodology gaps closed after review:
-#
-#   1. g_sd's coverage_95 is not a meaningful pass/fail check for the zero
-#      scenario. g_sd = sd(g) >= 0 always, and the prior over it is
-#      continuous, so a well-behaved posterior essentially never puts the
-#      exact boundary value 0 inside its 95% interval -- coverage_95 there
-#      trends to ~0 regardless of how good the model is. summary_tbl now
-#      also reports mean_prob_below_delta (posterior P(g_sd < G_SD_DELTA),
-#      averaged over replications) and frac_upper_ci_below_delta (how often
-#      the 95% upper bound itself already rules out a bigger nonlinearity)
-#      for the g_sd row specifically -- read those, not coverage_95, for the
-#      false-positive check.
-#
-#   2. The g PATH shape (correlation/RMSE of the fitted g against the true
-#      centred path) used to be checked only once, in
-#      prior_predictive_check.R -- so only g_sd's SIZE was ever shown to
-#      recover reliably, never the shape. Every replication now also fits
-#      draws$g and records shape correlation/RMSE (shape_reps / the
-#      "_shape" files); zero's true g path is exactly constant, so its
-#      correlation is undefined and reported as NA, matching
-#      prior_predictive_check.R's convention, with RMSE alone standing in as
-#      the spurious-signal measure.
-#
-#   3. Aggregating only usable == TRUE fits before computing bias/RMSE/
-#      coverage is correct (an unconverged posterior is not a posterior
-#      summary), but silently doing that without also reporting how many
-#      replications were thrown away invites "recovery looks good because
-#      the hard datasets got dropped." Every scenario/T combination now also
-#      writes an attempt-level table: n_attempted, n_usable, usable_rate,
-#      mean/median divergences (over ALL attempts, not just usable ones),
-#      and separate rhat/ESS-bulk/ESS-tail/E-BFMI failure counts, via
-#      benchmark_utils.R's stan_fit_diagnostics() (already available through
-#      the nonlinear_sv.R source below) instead of the narrower divergences+
-#      rhat+ess_bulk-only check this used to run. summary_tbl itself now
-#      loops over the fixed `targets` list rather than split()'s dynamically
-#      discovered groups, so a combination where n_usable = 0 still gets a
-#      visible row (NAs, not a silently missing scenario/T) instead of
-#      vanishing from the combined CSV.
-#
-# Two things get replicated here, in sequence:
-#
-#   1. Three DGP scenarios (zero/main/strong -- same g_scale/lev_scale as
-#      prior_predictive_check.R) at one T, so identifiability claims from a
-#      single prior_predictive_check.R fit per scenario don't rest on a coin
-#      flip. All three now write "_<scenario>" files (main included -- see
-#      point 3 above, the output schema changed enough that keeping main's
-#      old bare filenames as a special case wasn't worth the extra code); a
-#      combined "_all" summary reads all three side by side.
-#
-#   2. 2026-08-22, per advisor request: "repeat the simulation with three
-#      sizes: T = 312, T = 520 (our full sample), and T = 1000 (just to see
-#      what more data would give us). Then we can explain WHY we chose T,
-#      and it will not look like an accident." All three scenarios (zero/
-#      main/strong) x all three T's, with K = 4 and the same priors held
-#      fixed across T, so the comparison isolates the effect of T alone.
-#      Output goes to "nnsv_recovery_summary_by_T.csv": read bias shrinking
-#      and coverage_95 moving toward 0.95 as T grows 312 -> 520 -> 1000 as
-#      the "more data helps, and 520 already captures most of the benefit"
-#      argument -- for main that settles "why T = 520"; for zero/strong it
-#      also shows whether false-positive control and the identifiability
-#      stress test hold up at T = 520 or only kick in at T = 1000. If 1000
-#      keeps improving a lot over 520, report that honestly too -- a real
-#      limitation of the sample, not something to hide.
-#
-# Run time is R x (3 scenarios + 3 T's) x (one fit) -- T = 1000 fits are the
-# slow ones. R_REP below applies to both parts; start with 5-20, 50-100 is
-# better once you know nothing is on fire.
 
 library(rstan)
 library(posterior)
 
 rstan_options(auto_write = TRUE)
-
-# Warm-start init (data-driven mu/phi/sigma_eta, NN weights near zero) and
-# stan_fit_diagnostics() (full rhat/ESS-bulk/ESS-tail/E-BFMI/divergence
-# bundle), both reused from nonlinear_sv.R / benchmark_utils.R -- same fix
-# that took the single-fit scenarios in prior_predictive_check.R from
-# double-digit divergences down to essentially none. See
-# prior_predictive_check.R for why the autorun option and chdir matter here.
 options(benchmark.nn_autorun = FALSE)
 source("../../nonlinear_sv.R", chdir = TRUE)
 
 options(mc.cores = 4)
 rstan_options(auto_write = TRUE)
-rstan_options(threads_per_chain = 1) # 必须保持为1
+rstan_options(threads_per_chain = 1) 
 # Toggle which part(s) actually run without deleting either -- e.g. set
 # RUN_SCENARIOS <- FALSE to rerun just the T-sensitivity part once Part 1's
 # results are already on disk, instead of redoing fits you already have.
@@ -121,22 +22,6 @@ K_hidden  <- 4
 X_AR      <- 0.90   # covariate persistence; matches simulation_study_nnsv.R's recommended design
 BURN_IN   <- 200
 G_SD_DELTA <- 0.05  # "practically zero" threshold for the g_sd false-positive check (point 1 above)
-
-# 2026-08-23, advisor's usable-rule fix: judge convergence only on the
-# quantities actually used downstream -- g_sd, h_bar, phi, sigma_eta, nu, and
-# the log-likelihood (lp__) -- NOT raw NN weights (label-switching makes their
-# individual rhat meaningless) and NOT mu (h_bar replaces it: mu sits on a
-# ridge with phi as phi -> 1 and can mix badly even when the fit is fine).
-# Checked against the already-saved T-sensitivity attempts CSVs: every
-# usable == FALSE case there was divergence-driven, not rhat/ess-driven, so
-# this narrower gate does not retroactively change those numbers -- but it's
-# the rule new runs (like the s = 1.0 fix below) should use going forward.
-#
-# lp__ is NOT in NEW_GATE_PARS: stan_fit_diagnostics() filters its `pars`
-# argument through intersect(pars, fit@model_pars), and lp__ is a sampler
-# quantity, not a declared model parameter, so it is never in fit@model_pars
-# and would silently be dropped if listed here. It is checked separately
-# below (lp_rhat/lp_ess_bulk/lp_ess_tail) and folded into `ok` by hand.
 NEW_GATE_PARS <- c("g_sd", "h_bar", "phi", "sigma_eta", "nu")
 
 mu_true        <- 1.80
@@ -226,9 +111,9 @@ run_scenario_replications <- function(label, T_sim, g_scale, lev_scale, seed_off
       s_fixed = 1, tau_w_scale = 0.2,
       mu_scale = 5, phi_a = 20, phi_b = 2,
       sigma_eta_scale = 1, b1_scale = 0.5, nu_rate = 0.1,
-      prior_only = 0L,        # 0 = 正常后验估计;1 = 仅先验预测检查
-      stationary_init = 0L,   # 使用 v3 的固定尺度初始状态
-      h1_scale = 2.0          # h_1 相对 mu 的固定扩散尺度
+      prior_only = 0L,        
+      stationary_init = 0L,   
+      h1_scale = 2.0       
     )
 
     linear_start <- nn_sv_linear_start(stan_data$y, stan_data$X)
@@ -241,11 +126,7 @@ run_scenario_replications <- function(label, T_sim, g_scale, lev_scale, seed_off
     )
 
     # -------------------------------------------------------------------------
-    # Full attempt-level diagnostics (point 3): rhat/ESS-bulk/ESS-tail/E-BFMI/
-    # divergences all from stan_fit_diagnostics(), narrowed to the scalar
-    # structural parameters (not the T-length h/eta_raw/g paths) so this
-    # stays fast at T = 1000. treedepth hits aren't part of that helper, so
-    # they're added separately from the same sampler_params object.
+    # Full attempt-level diagnostics
     # -------------------------------------------------------------------------
     diagnostics <- stan_fit_diagnostics(fit, pars = NEW_GATE_PARS)
     sp   <- get_sampler_params(fit, inc_warmup = FALSE)
@@ -288,14 +169,6 @@ run_scenario_replications <- function(label, T_sim, g_scale, lev_scale, seed_off
       row.names = NULL
     )
 
-    # -------------------------------------------------------------------------
-    # Where do the divergent transitions sit?  For each candidate quantity,
-    # compare its mean among divergent draws to its mean over all draws, in
-    # units of that quantity's overall sd (a numeric stand-in for
-    # pairs(fit, condition = "divergent__")). Large |z_shift| = divergences
-    # concentrate there; this is what usually fingers a funnel (e.g. tau_w
-    # collapsing toward 0 while W1/w2_raw blow up) or a boundary ridge
-    # (phi -> 1, mu-phi).
     # -------------------------------------------------------------------------
     if (ndiv > 0) {
       # permuted = FALSE keeps [iteration, chain, parameter] order aligned with
@@ -351,10 +224,7 @@ run_scenario_replications <- function(label, T_sim, g_scale, lev_scale, seed_off
     }
 
     # -------------------------------------------------------------------------
-    # Shape of g (point 2): repeated every replication, not just once in
-    # prior_predictive_check.R. sd(true_g_c) == 0 in the zero scenario (g is
-    # exactly constant there), so correlation is undefined -- reported as NA,
-    # RMSE alone stands in as the spurious-fitted-signal measure.
+    # Shape of g
     # -------------------------------------------------------------------------
     g_draws  <- rstan::extract(fit, pars = "g")$g
     g_median <- apply(g_draws, 2, median)
@@ -388,14 +258,11 @@ run_scenario_replications <- function(label, T_sim, g_scale, lev_scale, seed_off
       T               = T_sim,
       parameter       = p,
       n_usable        = n,
-      mean_true_value = if (n) mean(s$true_value) else NA_real_,   # varies by rep for mu/g_sd; see header
+      mean_true_value = if (n) mean(s$true_value) else NA_real_,   # varies by rep for mu/g_sd
       mean_median     = if (n) mean(s$median) else NA_real_,
       bias            = if (n) mean(s$median - s$true_value) else NA_real_,
       rmse            = if (n) sqrt(mean((s$median - s$true_value)^2)) else NA_real_,
       mean_ci_width   = if (n) mean(s$upper_95 - s$lower_95) else NA_real_,
-      # Not a meaningful pass/fail check for g_sd's zero-scenario boundary
-      # case (point 1) -- read mean_prob_below_delta/frac_upper_ci_below_delta
-      # for that instead.
       coverage_95     = if (n) mean(s$true_value >= s$lower_95 & s$true_value <= s$upper_95) else NA_real_,
       mean_prob_below_delta     = if (n && p == "g_sd") mean(s$prob_below_delta) else NA_real_,
       frac_upper_ci_below_delta = if (n && p == "g_sd") mean(s$upper_95 < G_SD_DELTA) else NA_real_
@@ -436,8 +303,7 @@ run_scenario_replications <- function(label, T_sim, g_scale, lev_scale, seed_off
   )
 }
 
-# Writes every component of one run_scenario_replications() result under a
-# common file-name suffix.
+
 write_replication_outputs <- function(out, suffix) {
   write.csv(out$reps,            paste0("nnsv_recovery_replications_", suffix, ".csv"), row.names = FALSE)
   write.csv(out$shape_reps,      paste0("nnsv_recovery_shape_", suffix, ".csv"), row.names = FALSE)
@@ -479,22 +345,10 @@ if (RUN_SCENARIOS) {
   print(combine_field(all_out, "summary"))
   print(combine_field(all_out, "attempt_summary"))
 
-  # Read it as: coverage_95 near 0.95 with small bias = recovery (except g_sd
-  # in the zero scenario -- see point 1 in the header, read
-  # mean_prob_below_delta/frac_upper_ci_below_delta there instead). Coverage
-  # near 0.95 with a large mean_ci_width = the model is honest but the series
-  # is too short to be informative; that is a statement about T, not a bug.
-  # Compare g_sd's bias/rmse for strong against the single prior_predictive_
-  # check.R fit (true 0.404, that one fit's median 0.333): if the replicated
-  # bias is consistently negative and of similar size, it is a systematic
-  # shrinkage-toward-the-prior effect, not a one-off unlucky draw. Always read
-  # the attempt_summary alongside it -- n_usable/usable_rate and the rhat/ESS/
-  # E-BFMI failure counts say whether these numbers are conditioning away the
-  # hard datasets.
 }  # RUN_SCENARIOS
 
 # =============================================================================
-# Part 2: T sensitivity (advisor request, see file header) -- ALL THREE
+# Part 2: T sensitivity-- ALL THREE
 # scenarios (main/zero/strong), each across T = 312 / 520 / 1000. 3 scenarios
 # x 3 T's x R_REP fits; T = 1000 fits are the slow ones, so this is 9x a
 # single-T scenario run and 3x a main-only T run -- expect it to take a
