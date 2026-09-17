@@ -2,26 +2,6 @@ if (!exists("rolling_forecast", mode = "function", inherits = TRUE)) {
   source("benchmark_utils.R")
 }
 
-# linear_sv.stan is the null/restricted model for LOO comparison against
-# nonlinear_sv_v3.stan, and (2026-08-25) regimeSwitchingSV's single-regime
-# twin: it now carries the same real covariates (bench$X_all --
-# default_benchmark_covariates() in benchmark_utils.R) through the same
-# X[t] * beta term as regime_switching_sv.stan, so the two are comparable on
-# equal footing -- a QLIKE/LPS gap between them reflects the regime structure,
-# not one model seeing covariates the other doesn't. K, s_fixed, tau_w_scale,
-# b1_scale are still unused dummy fields (this model's likelihood never
-# touches them); those get fixed dummy values so the same *shape* of
-# stan_data still works for a shared-schema comparison against
-# nonlinear_sv_v3.stan without this file depending on nonlinear_sv.R being
-# sourced (run_models.R only sources the files a given MODELS_TO_RUN
-# selection actually needs).
-#
-# x_forecast is the covariate row one step past the training window, used
-# only by linear_sv.stan's own generated-quantities h_forecast (an
-# informational one-step preview). The rolling forecast itself does not read
-# it -- forecast_linear_sv_one_step() below looks up bench$X_all at the
-# actual forecast_index for every step between refits, the same way
-# forecast_ms_sv_one_step() does.
 linear_sv_stan_data <- function(bench, train_indices,
                                 use_student_t = TRUE,
                                 prior_only = 0L,
@@ -45,18 +25,18 @@ linear_sv_stan_data <- function(bench, train_indices,
   list(
     T = T_train,
     D = ncol(bench$X_all),
-    K = 1L,                                    # unused; dummy dimension
+    K = 1L,                                  
     y = bench$y_all[train_indices],
     X = bench$X_all[train_indices, , drop = FALSE],
     use_student_t = as.integer(isTRUE(use_student_t)),
     x_forecast = as.numeric(x_forecast),
-    s_fixed = 0.5,                              # unused
-    tau_w_scale = 0.5,                          # unused
+    s_fixed = 1,                            
+    tau_w_scale = 0.2,                         
     mu_scale = as.numeric(mu_scale),
     phi_a = as.numeric(phi_a),
     phi_b = as.numeric(phi_b),
     sigma_eta_scale = as.numeric(sigma_eta_scale),
-    b1_scale = 0.5,                             # unused
+    b1_scale = 0.5,                          
     nu_rate = as.numeric(nu_rate),
     prior_only = as.integer(as.logical(prior_only)),
     stationary_init = as.integer(as.logical(stationary_init)),
@@ -154,12 +134,6 @@ fit_linear_sv_refit <- function(compiled_model,
   post <- rstan::extract(fit)
   n_draws <- length(post$mu)
 
-  # 2026-08-24: judge convergence only on the quantities actually used
-  # downstream -- h_bar, phi, sigma_eta, nu, and the log-likelihood -- not
-  # mu (phi -> 1 makes it sit on a ridge with phi and mix badly even in an
-  # otherwise-fine fit; h_bar is identified there and is what forecasting
-  # actually reads). Same rule validated on nonlinear SV via
-  # results/simulation/recovery_replications.R.
   linear_diagnostic_pars <- c("h_bar", "phi", "sigma_eta", "nu", "lp__")
   diagnostics <- stan_fit_diagnostics(fit, pars = linear_diagnostic_pars)
   assert_stan_diagnostics(
@@ -180,12 +154,6 @@ fit_linear_sv_refit <- function(compiled_model,
   )
 }
 
-# 2026-08-24: fits only the initial training window and reports its
-# convergence -- a deliberate, manual first step (not an automatic gate any
-# more): run this via PREFLIGHT_ONLY in run_models.R, look at the real
-# diagnostics (with CHECK_CONVERGENCE = TRUE), and only then decide whether
-# to flip PREFLIGHT_ONLY off and let run_linear_sv() below roll through
-# validation/test.
 run_linear_sv_preflight <- function(compiled_model,
                                     bench,
                                     chains,
@@ -244,11 +212,7 @@ make_linear_sv_fitter <- function(compiled_model, chains, iter, warmup, seed,
   }
 }
 
-# 2026-08-25: X is real again (see linear_sv_stan_data()'s header), so the
-# transition needs the same covariate effect regime_switching_sv.R's
-# forecast_ms_sv_one_step() adds -- looked up at this step's own
-# forecast_index rather than baked into the fit, since one refit covers many
-# one-step forecasts between refits.
+
 forecast_linear_sv_one_step <- function(model, state, forecast_index, bench) {
   post <- model$posterior
   draw_index <- state$draw_index
@@ -305,10 +269,7 @@ run_linear_sv <- function(bench = load_benchmark_data(),
 
   compiled_model <- rstan::stan_model(file = "linear_sv.stan")
 
-  # No preflight gate any more (2026-08-24): the simulation-based recovery
-  # study already validated this model family, so the first refit inside
-  # rolling_forecast() below is fit directly rather than pre-checked and
-  # reused. See run_models.R's PREFLIGHT_ONLY comment.
+
   result <- rolling_forecast(
     bench = bench,
     fit_model = make_linear_sv_fitter(
