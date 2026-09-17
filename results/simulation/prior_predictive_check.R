@@ -1,25 +1,7 @@
-# prior_predictive_check.R (Prof. Juan Miguel's design; extended 2026-08-21
-# per advisor feedback to cover points 2-4 -- strong/zero cases, g shape, and
-# prior-vs-posterior plots, with h_bar reported next to mu throughout -- and
-# again to close three gaps flagged in review:
-#   1. the prior-vs-posterior table now carries true_value/bias/inside_95 for
-#      every parameter (previously only the separate g-shape table had a true
-#      value, under a different name, so g_sd's own recovery couldn't be read
-#      off the main table without cross-referencing).
-#   2. h_bar's true value is now a column in that same table, not just a
-#      message() line -- it survives into the CSV for the thesis.
-#   3. chains now start from a linear-SV-style warm start (mu/phi/sigma_eta
-#      via nn_sv_linear_start()) with the NN weights initialised near zero
-#      (via nn_sv_init()), both reused from nonlinear_sv.R instead of
-#      init_r = 0.5; and per-chain divergence/treedepth/E-BFMI, rhat/ESS, and
-#      trace/rank/pairs plots are saved for the posterior fit of every
-#      scenario (advisor point 6).
-#
+# prior_predictive_check.R 
 # The single most important check left: is the posterior for g_sd (the
 # amplitude of the fitted nonlinearity) actually being driven by the data,
-# or is it just the prior? Under the INTERIM configuration (K=4, s_fixed=0.5,
-# tau_w_scale=0.5) prior simulation put g_sd at a median of about 0.151 with a
-# 90% interval of roughly [0.012, 0.378]. Those numbers no longer describe
+# or is it just the prior? 
 # this script: the data block below is now the adopted production
 # configuration (s_fixed=1.0, tau_w_scale=0.2), so the prior column of
 # nnsv_prior_vs_posterior_all.csv is the authority, not this comment.
@@ -72,12 +54,7 @@ options(mc.cores = parallel::detectCores())
 options(benchmark.nn_autorun = FALSE)
 source("../../nonlinear_sv.R", chdir = TRUE)
 
-# NOTE: the original version of this script pointed at "nonlinear_sv.stan",
-# which has no prior_only / stationary_init / h1_scale data fields and no
-# h_bar generated quantity. rstan silently ignores unused data list entries,
-# so fit_prior there was NOT actually a prior predictive fit (prior_only had
-# no effect), and pull(fit, "h_bar") would error. Fixed to v3 here.
-model <- stan_model("nonlinear_sv_v3.stan")
+model <- stan_model("nonlinear_sv.stan")
 
 # DGP constants shared by all three scenarios (only g_scale/lev_scale differ
 # between them; see simulation_study_nnsv.R). Needed to compute each
@@ -86,12 +63,6 @@ phi_true       <- 0.95
 sigma_eta_true <- 0.25
 nu_true        <- 10
 
-# 2026-08-26: sampler settings synced to production as well (run_models.R:
-# STAN_CHAINS = 4, STAN_WARMUP = 2000, NN_STAN_SAMPLING = 4000 -> iter = 6000,
-# benchmark.nn_adapt_delta = STAN_ADAPT_DELTA = 0.995, max_treedepth = 12).
-# Was iter = 4000 / warmup = 1500 / adapt_delta = 0.999; the stricter old
-# adapt_delta suppressed divergences that the reported specification does not
-# suppress, which is exactly what this check should not hide.
 run <- function(d, init_fn, ...) sampling(
   model, data = d, chains = 4, cores = 4,
   iter = 6000, warmup = 2000, refresh = 0, init = init_fn,
@@ -186,16 +157,13 @@ run_scenario <- function(label, sim_csv, seed_prior, seed_post, true_g_is_zero =
     h_bar     = mean(sim_data$h_true)
   )
 
-  # Advisor point 6: start mu/phi/sigma_eta from the same cheap linear-SV
-  # proxy fit_nonlinear_sv() uses, and the NN weights near zero (nn_sv_init's
-  # data-driven branch), instead of rstan's undirected init_r = 0.5 spread.
   linear_start <- nn_sv_linear_start(base_data$y, base_data$X)
   init_fn <- function() nn_sv_init(base_data, previous_post = NULL, linear_start = linear_start)
 
   fit_prior <- run(prior_data, init_fn, seed = seed_prior)
   fit_post  <- run(base_data,  init_fn, seed = seed_post)
 
-  # --- point 6: per-chain HMC diagnostics + trace/rank/pairs plot ---------
+  # --- per-chain HMC diagnostics + trace/rank/pairs plot ---------
   # Only the posterior fit is checked this closely: prior_only drops the
   # likelihood, so there is nothing for those chains to get stuck on -- any
   # convergence issues there would be a geometry problem in the prior itself,
@@ -229,7 +197,7 @@ run_scenario <- function(label, sim_csv, seed_prior, seed_post, true_g_is_zero =
     pairs_pars = c("phi", "sigma_eta", "tau_w")
   )
 
-  # --- point 2: prior vs posterior table, now with true_value/bias/inside_95
+  # --- prior vs posterior table, now with true_value/bias/inside_95
   tbl <- do.call(rbind, lapply(
     c("mu", "phi", "sigma_eta", "nu", "tau_w", "g_sd", "h_bar"),
     function(p) compare(fit_prior, fit_post, p, true_value = true_vals[[p]])))
@@ -237,7 +205,7 @@ run_scenario <- function(label, sim_csv, seed_prior, seed_post, true_g_is_zero =
   print(tbl, digits = 3)
   write.csv(tbl, paste0("nnsv_prior_vs_posterior_", label, ".csv"), row.names = FALSE)
 
-  # --- point 4: prior/posterior density overlay for g_sd and nu -----------
+  # --- prior/posterior density overlay for g_sd and nu -----------
   png(paste0("nnsv_prior_vs_posterior_", label, ".png"), width = 900, height = 450)
   op <- par(mfrow = c(1, 2))
   for (par_name in c("g_sd", "nu")) {
@@ -250,7 +218,7 @@ run_scenario <- function(label, sim_csv, seed_prior, seed_post, true_g_is_zero =
   par(op)
   dev.off()
 
-  # --- point 3: shape of g, not just its size ------------------------------
+  # --- shape of g, not just its size ------------------------------
   # g_sd only says the fitted wiggle is the right SIZE; this says whether it
   # is the right wiggle -- the advisor's suspicion is that sigma_eta comes
   # out too high because g has roughly the right size but the wrong shape,
@@ -277,7 +245,7 @@ run_scenario <- function(label, sim_csv, seed_prior, seed_post, true_g_is_zero =
   }
   print(shape, digits = 3)
 
-  # --- h_bar next to mu (advisor point 5) -----------------------------------
+  # --- h_bar next to mu  -----------------------------------
   # True value and posterior are both already in `tbl`/its CSV now (point 2
   # fix); this is just a quick console readout, not the only record of it.
   h_bar_post <- pull(fit_post, "h_bar")
