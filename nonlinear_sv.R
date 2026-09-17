@@ -32,11 +32,6 @@ nn_sv_default_config <- function() {
     sigma_eta_scale = getOption("benchmark.nn_sigma_eta_scale", 1),
     b1_scale = getOption("benchmark.nn_b1_scale", 1),
     nu_rate = getOption("benchmark.nn_nu_rate", 0.1),
-    # stationary_init = 0 (the validated default) replaces h[1]'s stationary
-    # scale sigma_eta / sqrt(1 - phi^2) -- which explodes as phi -> 1 and was
-    # the likely source of stuck chains -- with a fixed diffuse h1_scale.
-    # See results/simulation/nonlinear_sv_v3.stan and the 2026-08-21
-    # simulation study that motivated it.
     stationary_init = getOption("benchmark.nn_stationary_init", 0L),
     h1_scale = getOption("benchmark.nn_h1_scale", 2.0),
     seed = getOption("benchmark.nn_seed", 6666L)
@@ -135,10 +130,6 @@ build_nn_sv_stan_data <- function(bench, train_indices, K,
       sigma_eta_scale = as.numeric(config$sigma_eta_scale),
       b1_scale = as.numeric(config$b1_scale),
       nu_rate = as.numeric(config$nu_rate),
-      # prior_only is always 0 here: this builds data for actual fits, not
-      # prior-predictive checks (those are run directly against the compiled
-      # model -- see results/simulation/prior_predictive_check.R -- with
-      # prior_only overridden to 1 on a copy of this data).
       prior_only = 0L,
       stationary_init = as.integer(as.logical(config$stationary_init)),
       h1_scale = as.numeric(config$h1_scale)
@@ -150,14 +141,6 @@ build_nn_sv_stan_data <- function(bench, train_indices, K,
   )
 }
 
-# exp(h / 2) is the Student-t SCALE this model's likelihood uses, not the
-# conditional standard deviation: for the raw (unstandardised) Student-t
-# convention, Var(y | h) = exp(h) * nu / (nu - 2), so the actual SD needs the
-# extra sqrt(nu / (nu - 2)) factor (~1.07-1.12x for nu in the 16-20 range
-# this model tends to estimate). nu_minus2 = NULL (Gaussian case, or when
-# use_student_t = FALSE) skips the correction, since exp(h/2) is already the
-# SD there. nu_minus2 broadcasts per row when h is an [iterations x T]
-# matrix, or elementwise when both are equal-length vectors.
 nn_sv_conditional_volatility <- function(h, nu_minus2 = NULL) {
   if (is.null(nu_minus2) || length(nu_minus2) == 0L) {
     return(exp(h / 2))
@@ -363,13 +346,6 @@ fit_nonlinear_sv <- function(bench, train_indices, K = 8L,
   )
   post <- rstan::extract(fit)
 
-  # 2026-08-24: judge convergence only on the quantities actually used
-  # downstream -- g_sd, h_bar, phi, sigma_eta, nu, and the log-likelihood --
-  # not the raw NN weights (W1/b1/w2_raw/tau_w: hidden-unit label-switching
-  # makes their individual rhat meaningless even in a perfectly good fit)
-  # and not mu (h_bar replaces it, same reasoning as linear/MS-SV). Also
-  # drops the full T-length h path (not itself reported, and expensive to
-  # extract). Validated via results/simulation/recovery_replications.R.
   diagnostic_pars <- c("g_sd", "h_bar", "phi", "sigma_eta", "nu", "lp__")
   diagnostics <- stan_fit_diagnostics(fit, pars = diagnostic_pars)
   assert_stan_diagnostics(diagnostics, "Nonlinear SV", strict = strict_diagnostics)
@@ -402,10 +378,7 @@ fit_nonlinear_sv <- function(bench, train_indices, K = 8L,
     tau_w = post$tau_w,
     g_sd = post$g_sd
   )
-  # h_bar stays identified when phi -> 1 and mu does not (see
-  # nonlinear_sv.stan); report it next to mu wherever parameter_summary is
-  # used, not as a separate lookup. NULL only for a stanfit compiled before
-  # this was added to the model's generated quantities.
+
   if (!is.null(post$h_bar)) parameter_draws$h_bar <- post$h_bar
   if (!is.null(post$nu_minus2) && length(post$nu_minus2)) {
     parameter_draws$nu <- post$nu_minus2 + 2
@@ -499,13 +472,6 @@ fit_nn_sv_refit <- function(compiled_model, K, use_student_t, config,
   )
 }
 
-# 2026-08-24: fits only the initial training window (with the preflight
-# candidate architecture) and reports its convergence -- a deliberate,
-# manual first step (not an automatic gate any more): run this via
-# PREFLIGHT_ONLY in run_models.R, look at the real diagnostics (with
-# CHECK_CONVERGENCE = TRUE), and only then decide whether to flip
-# PREFLIGHT_ONLY off and let run_nonlinear_sv() below roll through
-# validation/test.
 run_nn_sv_preflight <- function(compiled_model, bench, candidate, config) {
   train_indices <- bench$split_rows$train
   fitted <- fit_nn_sv_refit(
@@ -531,18 +497,6 @@ run_nn_sv_preflight <- function(compiled_model, bench, candidate, config) {
 }
 
 default_nn_candidates <- function() {
-  # 2026-08-26: restored the full K x distribution grid from the 8.8
-  # protocol (K in {4, 8} x {Gaussian, Student-t}), replacing the single
-  # hardcoded K4_Student_t candidate used since 2026-08-24.
-  #
-  # Carrying forward that date's caveat rather than resolving it: only K = 4
-  # was checked for parameter recovery/convergence in
-  # results/simulation/recovery_replications.R and nnsv_sensitivity.R's
-  # K x tau_w_scale grid. K = 8 has not had the same simulation-based check,
-  # so its validation-window fits are the first time it's been run on this
-  # T at all. If it's selected, read stan_convergence.csv and the divergence
-  # counts for the K8 candidates before trusting the pick -- a K8 win driven
-  # by an unconverged fit would not be a real architecture win.
   list(
     list(K = 4L, use_student_t = TRUE,  label = "K4_Student_t"),
     list(K = 4L, use_student_t = FALSE, label = "K4_Gaussian"),
@@ -596,9 +550,6 @@ run_nonlinear_sv <- function(bench = load_benchmark_data(),
   parallel_config <- configure_nn_sv_parallel(config$chains)
   compiled_model <- rstan::stan_model(file = config$stan_file)
 
-  # No preflight gate any more (2026-08-24): see run_models.R's
-  # PREFLIGHT_ONLY comment. Each candidate's first refit is fit directly
-  # inside rolling_forecast() below rather than pre-checked and reused.
   runner <- function(candidate, forecast_indices, refit_every) {
     candidate_config <- config
     candidate_config$refit_every <- refit_every
