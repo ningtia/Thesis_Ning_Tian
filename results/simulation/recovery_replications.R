@@ -392,43 +392,13 @@ if (RUN_T_SENSITIVITY) {
   t_attempt_summary <- t_attempt_summary[order(t_attempt_summary$scenario, t_attempt_summary$T), ]
   write.csv(t_attempt_summary, "nnsv_recovery_attempt_summary_by_T.csv", row.names = FALSE)
   print(t_attempt_summary)
-
-  # Read across T within each (scenario, parameter), especially g_sd: bias
-  # shrinking and coverage_95 moving toward 0.95 as T grows from 312 to 520 to
-  # 1000 is the "more data helps, and 520 already captures most of the
-  # benefit" argument -- for main this settles "why T = 520"; for zero/strong
-  # it additionally shows whether the false-positive control and the
-  # identifiability stress test both hold up, or only kick in at larger T. If
-  # 520 and 1000 look almost identical while 312 is clearly worse, that is the
-  # strongest version of "T = 520 was not an accident" the advisor asked for.
-  # If 1000 keeps improving a lot over 520, say that honestly too -- a real
-  # limitation of the sample, not a reason to hide the T = 1000 row. Cross-
-  # check every number here against nnsv_recovery_attempt_summary_by_T.csv's
-  # usable_rate before writing any of it up.
 }  # RUN_T_SENSITIVITY
 
 # =============================================================================
-# Part 3 (2026-08-23): advisor's two fixes together, T = 520 (the real sample
+# Part 3 : T = 520 (the real sample
 # size), all three scenarios, R_REP replications each.
 #
-#   Fix 1: s_fixed is now 1.0 (see stan_data above), not 0.50. The strong
-#   scenario's g_sd was consistently underestimated with s_fixed = 0.50
-#   because |g| <= s_fixed is a hard bound, and the true g often exceeds 0.5
-#   when true g_sd ~ 0.5 -- the model literally cannot represent it. Expect
-#   that bias to shrink a lot here.
-#
-#   Fix 2: the usable gate is now NEW_GATE_PARS (g_sd, h_bar, phi, sigma_eta,
-#   nu, lp__), not mu/tau_w/raw weights. Checked against the existing T = 312/
-#   520/1000 attempts CSVs (s_fixed = 0.50): every usable == FALSE case there
-#   was divergence-driven, not rhat/ess-driven, so this narrower gate would
-#   not have changed those numbers -- but if s_fixed = 1.0 also reduces
-#   divergences (plausible: the old bound may have been straining the
-#   network's geometry, not just capping its output), usable_rate here could
-#   genuinely be higher than the old T = 520 rows, for a real reason this
-#   time.
-#
-# Suffixed "_s1_T520" throughout so nothing overwrites the existing s = 0.50
-# T-sensitivity files -- the two are meant to be compared side by side.
+#   Fix 1: s_fixed is now 1.0 (see stan_data above), not 0.50.
 # =============================================================================
 if (RUN_S1_FIX) {
   S1_FIX_T <- 520
@@ -460,10 +430,4 @@ if (RUN_S1_FIX) {
   write.csv(s1_attempt_summary, "nnsv_recovery_attempt_summary_s1_T520.csv", row.names = FALSE)
   print(s1_attempt_summary)
 
-  # Compare directly against the T = 520 rows of nnsv_recovery_summary_by_T.csv
-  # / nnsv_recovery_attempt_summary_by_T.csv (s_fixed = 0.50, old gate):
-  #   - strong's g_sd bias should shrink a lot (Fix 1 working).
-  #   - usable_rate may or may not move; if it does, that's Fix 1 fixing
-  #     divergences as a side effect, not Fix 2 (Fix 2 was shown to be a
-  #     no-op on the old data).
 }  # RUN_S1_FIX
