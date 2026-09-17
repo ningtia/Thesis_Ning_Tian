@@ -455,7 +455,7 @@ combine_field <- function(out_list, field) do.call(rbind, lapply(out_list, `[[`,
 # =============================================================================
 # Part 1: zero/main/strong scenarios at one T
 #
-# T = 500 here was never chosen to match anything real -- it was
+# T = 520 here was never chosen to match anything real -- it was
 # simulate_nnsv()'s original function default from before this became a
 # 3-scenario study. Part 2 below uses the advisor's actual three sizes
 # (312/520/1000); once that confirms 520 behaves reasonably, consider
@@ -463,7 +463,7 @@ combine_field <- function(out_list, field) do.call(rbind, lapply(out_list, `[[`,
 # everywhere.
 # =============================================================================
 if (RUN_SCENARIOS) {
-  MAIN_T <- 500
+  MAIN_T <- 520
 
   all_out <- lapply(names(scenarios), function(nm) {
     s <- scenarios[[nm]]
@@ -516,7 +516,7 @@ if (RUN_T_SENSITIVITY) {
       label = nm, T_sim = T_sim,
       g_scale = s$g_scale, lev_scale = s$lev_scale,
       # offset by T so seeds don't collide across the three sizes, the three
-      # scenarios, or Part 1's own T=500 run of the same scenarios
+      # scenarios, or Part 1's own T=520 run of the same scenarios
       seed_offset = s$seed_offset + T_sim * 10L
     )
   })
