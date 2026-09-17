@@ -2,10 +2,6 @@ if (!exists("rolling_forecast", mode = "function", inherits = TRUE)) {
   source("benchmark_utils.R")
 }
 
-# 2026-08-25: mu_scale/phi_a/phi_b/nu_rate default to the same values as
-# linear_sv_stan_data()/nn_sv_default_config() (5, 20, 1.5, 0.1) -- see
-# regime_switching_sv.stan's data block comment. sigma_eta has no analogous
-# argument here: its prior stays hardcoded in the .stan file on purpose.
 ms_sv_stan_data <- function(bench, train_indices,
                             stationary_init = 0L, h1_scale = 2.0,
                             mu_scale = 5, phi_a = 20, phi_b = 1.5,
@@ -118,15 +114,6 @@ fit_regime_switching_sv_refit <- function(compiled_model,
   last_t <- length(train_indices)
   p_regime_1 <- post$filtered_prob_last[, 1]
 
-  # 2026-08-24: judge convergence only on the quantities actually used
-  # downstream, same rule as linear/nonlinear SV. MS-SV has no h_bar
-  # analogue, so mu (both regime components) stays in the set rather than
-  # being replaced; beta and eta_raw (the "raw weights" here -- inputs the
-  # forecast never reads directly) and the unit-scale nuisance
-  # reparameterisations (phi_unit/log_sigma_eta/p11_unit/p22_unit) are
-  # dropped in favour of the natural-scale quantities forecast_ms_sv_one_step()
-  # actually consumes (phi, sigma_eta, p11, p22), plus nu and the
-  # log-likelihood.
   ms_diagnostic_pars <- c("mu", "phi", "sigma_eta", "nu", "p11", "p22", "lp__")
   diagnostics <- stan_fit_diagnostics(fit, pars = ms_diagnostic_pars)
   assert_stan_diagnostics(
@@ -152,12 +139,6 @@ fit_regime_switching_sv_refit <- function(compiled_model,
   )
 }
 
-# 2026-08-24: fits only the initial training window and reports its
-# convergence -- a deliberate, manual first step (not an automatic gate any
-# more): run this via PREFLIGHT_ONLY in run_models.R, look at the real
-# diagnostics (with CHECK_CONVERGENCE = TRUE), and only then decide whether
-# to flip PREFLIGHT_ONLY off and let run_regime_switching_sv() below roll
-# through validation/test.
 run_regime_switching_sv_preflight <- function(compiled_model,
                                               bench,
                                               chains,
@@ -294,9 +275,6 @@ run_regime_switching_sv <- function(
   options(mc.cores = min(as.integer(chains), cores))
   compiled_model <- rstan::stan_model(file = "regime_switching_sv.stan")
 
-  # No preflight gate any more (2026-08-24): see run_models.R's
-  # PREFLIGHT_ONLY comment. First refit is fit directly inside
-  # rolling_forecast() below rather than pre-checked and reused.
   result <- rolling_forecast(
     bench = bench,
     fit_model = make_regime_switching_sv_fitter(
