@@ -1,15 +1,4 @@
 """Build the train/validation/test datasets from the raw source files.
-
-This is a faithful, scripted conversion of ``raw data/processing.ipynb``. It
-exists because the replication chain was otherwise broken at its first link:
-every table in the thesis could be regenerated from the three split CSVs by
-``run_models.R``, but those CSVs themselves came out of a notebook that had to
-be run by hand. Running this script is now step one of ``make.R``.
-
-The construction is deterministic -- no random numbers are drawn anywhere in
-this file, so no seed is required -- and the output is byte-comparable with the
-notebook's, which was verified when the conversion was made.
-
 Usage
 -----
     python 01_build_datasets.py                     # raw data/ -> project root
@@ -51,11 +40,11 @@ REQUIRED_FILES = [
     "clean_energy_etf_ICLN.csv",
     "clean_energy_etf_TAN.csv",
     "Libro1.xlsx",
-    "Libro2.xlsx",
+    "iTraxx.xlsx",
     "Global Clean Energy Transition Index.xls",
     "cpu_all_countries_monthly.csv",
     "Global_Economic_Policy_Uncertainty_EPU.xlsx",
-    "rate_2yield.csv",
+    "rate_3month.csv",
     "rate_10yield.csv",
     "v2tx.txt",
     "ICE Dutch TTF Natural Gas Futures Historical Data.csv",
@@ -191,7 +180,7 @@ def build(raw: Path) -> pd.DataFrame:
     df = pd.merge(df, carbon_wed[["Date", "l_t", "c_t"]], on="Date", how="left")
 
     # --- iTraxx Crossover: weekly FIRST DIFFERENCE of the index ---------------
-    itraxx = pd.read_excel(raw / "Libro2.xlsx")
+    itraxx = pd.read_excel(raw / "iTraxx.xlsx")
     itraxx["itraxx"] = pd.to_numeric(itraxx["TRDPRC_1"], errors="coerce")
     itraxx.rename(columns={"Timestamp": "Date"}, inplace=True)
     itraxx_wed = wednesday_slice(itraxx)
