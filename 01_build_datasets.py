@@ -193,7 +193,7 @@ def build(raw: Path) -> pd.DataFrame:
     # term spread built here is therefore the 10-year government bond yield
     # minus the 3-month interbank rate. Documented rather than silently renamed
     # so the thesis text and the data agree.
-    r_short = pd.read_csv(raw / "rate_2yield.csv", parse_dates=["observation_date"])
+    r_short = pd.read_csv(raw / "rate_3month.csv", parse_dates=["observation_date"])
     r_long = pd.read_csv(raw / "rate_10yield.csv", parse_dates=["observation_date"])
     rates = pd.merge(r_short, r_long, on="observation_date")
     rates["rate_short"] = pd.to_numeric(rates["IR3TIB01EZM156N"], errors="coerce")
